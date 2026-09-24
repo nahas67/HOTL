@@ -10,6 +10,7 @@ Start with the [complete checkpoint](readit.md), [project current-state and prom
 and [current evidence](docs/continuation-verification.md).
 
 The owner-supplied [locked program plan](docs/locked-program-plan.md) sets the next evidence gates. [Gate A's pilot business and risk worksheet](docs/pilot-business-risk-envelope.md) records unknown owner inputs without treating them as approved policy.
+The [maturity register](docs/program-maturity-register.md) assigns one evidence level to each major capability, and [Gate B1 evidence](evidence/gate-b1-source-control/README.md) records the first local source-control baseline.
 
 ## Run locally
 

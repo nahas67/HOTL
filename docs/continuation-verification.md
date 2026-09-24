@@ -1,8 +1,11 @@
 # Production continuation evidence
 
 Record updated 2026-09-23. Implementation and checks are local unless a row says
-otherwise. The repository has no initial commit; no commit hash or clean-tree
-claim is available. Logs under `artifacts/` are local ignored evidence, not remote
+otherwise. At the September 23 record date the repository had no initial commit.
+The September 24 local source baseline is commit
+`f83938ff51a0f5531998ed11380d55863f55ad2f`, tagged
+`hotl-baseline-2026-09-24`; see [Gate B1 evidence](../evidence/gate-b1-source-control/README.md).
+Logs under `artifacts/` are local ignored evidence, not remote
 CI artifacts. Package test totals may include Turbo reuse of unchanged results.
 
 ## Current checks — 2026-09-23

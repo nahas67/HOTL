@@ -245,3 +245,5 @@ Suggested reviewer output: requirement-to-status traceability matrix; factual co
 ---
 
 **Snapshot caveat:** This document reflects repository records and implementation files inspected on 2026-09-24. Where evidence is dated 2026-09-23 or earlier, that date is stated. A file, migration, test, mock receipt or planned deployment is not proof of a hosted/live capability. Refresh this snapshot after material code, deployment or evidence changes.
+
+**September 24 source-control addendum:** Initial local source commit `f83938ff51a0f5531998ed11380d55863f55ad2f` and annotated tag `hotl-baseline-2026-09-24` now exist. The preserved [locked program plan](docs/locked-program-plan.md), [maturity register](docs/program-maturity-register.md), [Gate A worksheet](docs/pilot-business-risk-envelope.md), and [Gate B1 evidence](evidence/gate-b1-source-control/README.md) govern the next review. No real provider or hosted evidence was added by this source-control step.

@@ -9,8 +9,10 @@ Runtime status: local simulation is runnable; this checkpoint does not claim a r
 This file is the continuation and handoff record for the platform built from
 `docs/commerce-os-build-prompt.md` and the latest
 `docs/production-continuation-prompt.md`. The earlier source prompt is preserved in
-`docs/source-build-prompt.md`. All implementation files are saved locally. Git has
-no initial commit, so there is no commit hash and the source tree remains untracked.
+`docs/source-build-prompt.md`. All implementation files are saved locally. This
+September 23 checkpoint predates source control. The September 24 local baseline is
+commit `f83938ff51a0f5531998ed11380d55863f55ad2f`, tagged
+`hotl-baseline-2026-09-24`; see [Gate B1 evidence](evidence/gate-b1-source-control/README.md).
 
 ## Latest continuation — read first
 
