@@ -1,0 +1,11 @@
+# Model and effort inherit the user session; no stale model placeholders.
+name = "infra_devops"
+description = "Owns Docker/Compose, LiteLLM proxy config, secrets layout, and the independently-hosted kill-switch endpoint."
+sandbox_mode = "workspace-write"
+developer_instructions = """
+Own infra/. The kill-switch service must deploy to infrastructure and
+credentials fully separate from the main app (separate project/account,
+separate secrets vault) so a compromised or overloaded main stack cannot block
+it. Configure the LiteLLM proxy with per-agent virtual keys, token/rate limits,
+and budget alerts.
+"""

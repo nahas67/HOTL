@@ -1,0 +1,25 @@
+{
+  "name": "@hotl/medusa-staging",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "medusa develop",
+    "build": "medusa build",
+    "start": "medusa start",
+    "db:migrate": "medusa db:migrate",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test test/*.test.ts"
+  },
+  "dependencies": {
+    "@medusajs/cli": "2.20.1",
+    "@medusajs/framework": "2.20.1",
+    "@medusajs/medusa": "2.20.1",
+    "bullmq": "5.58.5"
+  },
+  "devDependencies": {
+    "@types/node": "22.18.6",
+    "ts-node": "10.9.2",
+    "tsx": "4.20.5",
+    "typescript": "5.9.2"
+  }
+}

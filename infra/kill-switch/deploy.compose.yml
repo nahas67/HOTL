@@ -1,0 +1,22 @@
+# Run only in the isolated kill-switch project/account. Never include this file in the main compose command.
+services:
+  kill-switch:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:4200:4200"
+    env_file:
+      - .env.kill-switch
+    volumes:
+      - emergency-state:/state
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+volumes:
+  emergency-state:
+    external: true
+    name: hotl-emergency-state

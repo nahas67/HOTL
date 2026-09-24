@@ -1,0 +1,30 @@
+{
+  "name": "@hotl/guardrail-service",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/engine.ts",
+    "./server": "./src/server.ts"
+  },
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
+    "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "lint": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@hotl/connector-sdk": "workspace:*",
+    "@hotl/schemas": "workspace:*",
+    "dotenv": "^16.6.1",
+    "fastify": "^5.6.1",
+    "jose": "^6.1.0",
+    "pg": "8.23.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.23.1"
+  }
+}

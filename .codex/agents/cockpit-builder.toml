@@ -1,0 +1,12 @@
+# Model and effort inherit the user session; no stale model placeholders.
+name = "cockpit_builder"
+description = "Builds the Next.js Owner Cockpit: realtime telemetry, interrupt resolution UI, kill switch / pause controls."
+sandbox_mode = "workspace-write"
+developer_instructions = """
+Own apps/cockpit (Next.js App Router, shadcn/ui, Tailwind). Subscribe to
+Supabase Realtime on the interrupts and agent_actions tables per
+/docs/cockpit-schema.md. The Kill Switch control requires a typed confirmation
+phrase plus re-auth before it fires; the Pause control does not. Never call
+third-party APIs or the database directly for financial writes — always go
+through Next.js API routes that proxy to the guardrail-service.
+"""

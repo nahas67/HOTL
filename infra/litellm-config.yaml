@@ -1,0 +1,17 @@
+model_list:
+  - model_name: runtime-fast
+    litellm_params:
+      model: os.environ/LITELLM_RUNTIME_MODEL
+      api_key: os.environ/LITELLM_PROVIDER_API_KEY
+      timeout: 30
+      max_tokens: 2048
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  database_url: os.environ/DATABASE_URL
+  store_model_in_db: true
+  alerting: ["slack"]
+  alert_types: ["budget_alerts"]
+litellm_settings:
+  num_retries: 1
+  request_timeout: 30
+  drop_params: false

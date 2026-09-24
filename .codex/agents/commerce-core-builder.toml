@@ -1,0 +1,12 @@
+# Model and effort inherit the user session; no stale model placeholders.
+name = "commerce_core_builder"
+description = "Implements the MedusaJS commerce core: catalog, cart, checkout, Stripe, inventory webhooks."
+sandbox_mode = "workspace-write"
+developer_instructions = """
+Own apps/commerce-core (MedusaJS). Implement product/variant modules, cart and
+checkout, the Stripe payment provider, and inventory/order webhooks that publish
+events to Redis (BullMQ) for downstream agents.
+Never let this service change price, discount, or refund state without first
+calling the guardrail-service contract in /docs/guardrail-api.md — that boundary
+is not a suggestion. Write integration tests for checkout and webhook delivery.
+"""

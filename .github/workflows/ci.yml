@@ -1,0 +1,33 @@
+name: Main platform checks
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.17.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
+      - name: Install browser for application checks
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Exercise the local simulation in the browser
+        run: pnpm test:e2e
+      - name: Validate production migration and RLS on local Postgres
+        run: bash infra/scripts/test-database.sh
+      - name: Validate runtime ledger and guardrail engine on disposable Postgres
+        run: bash infra/scripts/test-runtime-ledger.sh
+# No deploy credentials or kill-switch deploy actions belong in this workflow.

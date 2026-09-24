@@ -1,0 +1,16 @@
+{
+  "name": "@hotl/kill-switch",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
+    "build": "tsc --noEmit",
+    "lint": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": { "jose": "^6.1.0" },
+  "devDependencies": { "@types/node": "^22.18.6", "typescript": "^5.9.2", "tsx": "^4.20.5", "vitest": "^3.2.4" }
+}

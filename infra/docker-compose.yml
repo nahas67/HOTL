@@ -1,0 +1,56 @@
+name: hotl-local
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: hotl
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in infra/.env}
+      POSTGRES_DB: hotl
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./postgres/bootstrap.sql:/docker-entrypoint-initdb.d/001-auth-shim.sql:ro
+      - ./supabase/migrations/202609070001_hotl.sql:/docker-entrypoint-initdb.d/002-hotl.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hotl -d hotl"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+  litellm:
+    image: ghcr.io/berriai/litellm:main-stable
+    profiles: ["models"]
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    environment:
+      DATABASE_URL: postgresql://hotl:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/hotl
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?Set independent LiteLLM master key}
+      LITELLM_SALT_KEY: ${LITELLM_SALT_KEY:?Set persistent independent LiteLLM salt key}
+      LITELLM_RUNTIME_MODEL: ${LITELLM_RUNTIME_MODEL:-}
+      LITELLM_PROVIDER_API_KEY: ${LITELLM_PROVIDER_API_KEY:-}
+      SLACK_WEBHOOK_URL: ${LITELLM_BUDGET_ALERT_WEBHOOK:-}
+    volumes:
+      - ./litellm-config.yaml:/app/config.yaml:ro
+    ports:
+      - "127.0.0.1:4000:4000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+volumes:
+  postgres-data:
+  redis-data:
+# The independent kill switch is intentionally absent. Its deployment lives in infra/kill-switch/.

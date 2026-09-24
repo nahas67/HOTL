@@ -1,0 +1,31 @@
+name: Isolated kill-switch checks and image
+on:
+  pull_request:
+    paths: ['infra/kill-switch/**', '.github/workflows/kill-switch-ci.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  isolated:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra/kill-switch
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: infra/kill-switch/package-lock.json
+      - run: npm ci --workspaces=false
+      - run: npm run typecheck
+      - run: npm test
+      - run: docker build -t hotl-kill-switch:validated .
+      - name: Export independently deployable artifact
+        run: docker save hotl-kill-switch:validated -o kill-switch-image.tar
+      - uses: actions/upload-artifact@v4
+        with:
+          name: independent-kill-switch-image
+          path: infra/kill-switch/kill-switch-image.tar
+# Publishing to a cloud account requires separately configured deployment secrets and environment protections.

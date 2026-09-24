@@ -1,0 +1,8 @@
+packages:
+  - apps/*
+  - packages/*
+  - infra/kill-switch
+
+onlyBuiltDependencies:
+  - esbuild
+  - sharp
