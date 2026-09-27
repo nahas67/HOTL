@@ -1,6 +1,6 @@
 # Next Working Plan — Complete Gates A–C
 
-**Updated:** 2026-09-28  
+**Updated:** 2026-09-28
 **Current state:** Gate A needs owner-verified facts and approval; Gate B staging evidence is incomplete; Gate C Shopify staging is not set up. The AI-selected U.S./USD desk-organization idea is only a research candidate.
 
 ## Goal
