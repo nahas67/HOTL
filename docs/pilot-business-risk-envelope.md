@@ -6,6 +6,8 @@
 
 **Owner update, 2026-09-24:** The pilot business and risk limits have not been decided. Every value below remains `UNKNOWN`; dependent real-money actions must stay blocked.
 
+**Owner update, 2026-09-28:** The owner asked AI to choose the business direction. The AI's provisional target-market recommendation is the United States, with an under-desk cable tray retained only as a research lead; current screening found no launch-ready product. Target market is not the owner's legal seller country. Seller/payment eligibility, fulfillment facts, unit economics and all owner financial limits remain `UNKNOWN` until verified and entered/approved through the cockpit.
+
 Record a source, date and owner approval for each material figure. Leave missing values as `UNKNOWN`. Product research and model estimates may inform a proposal but do not become owner-approved policy.
 
 ## A1 — One pilot business

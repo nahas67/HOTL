@@ -2,7 +2,7 @@
 
 **Status:** Preparation guide only. It is not an approval, a credential store, or evidence that a Shopify connection exists.
 
-The local engineering work for Gates A–C is committed. The owner asked AI to choose the initial business direction, so HOTL has a [dated AI research recommendation](pilot-ai-recommendation-2026-09-28.md): a U.S./USD adult home-office organization hypothesis, for validation only. The AI may rank markets and products from evidence, but it cannot establish owner financial authority. The legal seller country, payment eligibility, fulfillment origin, economics, capital/reserve, spend/exposure/refund caps and stop thresholds remain `UNKNOWN`; no purchase, advertising or live checkout is authorized. Shopify staging is still not set up. Keep the local simulation isolated while completing these steps.
+The local engineering work for Gates A–C is committed. The owner asked AI to choose the initial business direction, so HOTL has a [dated AI research recommendation](pilot-ai-recommendation-2026-09-28.md): the U.S./USD is a provisional target-market hypothesis, but no product currently passes the launch screen. An under-desk cable tray is only the simplest research lead. The AI may rank markets and products from evidence, but it cannot establish owner financial authority. The legal seller country, payment eligibility, fulfillment origin, economics, capital/reserve, spend/exposure/refund caps and stop thresholds remain `UNKNOWN`; no purchase, advertising or live checkout is authorized. Shopify staging is still not set up. Keep the local simulation isolated while completing these steps.
 
 ## 1. Decide one bounded pilot (Gate A)
 
