@@ -1,6 +1,33 @@
 .sidebar {
   overflow-y: auto;
 }
+
+.os-pilot-editor { display: grid; gap: 20px; }
+.os-pilot-section { border-top: 1px solid var(--line); padding-top: 22px; }
+.os-pilot-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.os-pilot-field { min-width: 0; border: 1px solid var(--line); border-radius: 9px; padding: 12px 15px; }
+.os-pilot-field legend { padding: 0 5px; font-size: 12px; font-weight: 600; }
+.os-pilot-field-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(145px, .7fr); gap: 12px; }
+.os-pilot-field .form-label { margin: 4px 0 8px; }
+.os-pilot-field .form-label > span { float: none; display: block; margin-top: 3px; }
+.os-pilot-field input:disabled, .os-pilot-field select:disabled { background: var(--sage); color: var(--muted); }
+.os-pilot-gaps { border: 1px solid #e9c9bb; background: #fff8f3; border-radius: 9px; padding: 13px 16px; font-size: 12px; }
+.os-pilot-gaps p, .os-pilot-help { color: var(--muted); font-size: 11px; line-height: 1.7; margin-top: 5px; }
+.os-pilot-add-rule { display: flex; align-items: end; gap: 12px; flex-wrap: wrap; }
+.os-pilot-add-rule .form-label { min-width: 230px; margin: 0; }
+.os-pilot-rule { display: grid; grid-template-columns: minmax(150px, 1.4fr) minmax(110px, .8fr) minmax(150px, 1fr) auto auto; gap: 12px; align-items: end; padding: 14px 0; border-top: 1px solid var(--line); }
+.os-pilot-rule > strong { font-size: 12px; align-self: center; }
+.os-pilot-rule .form-label { margin: 0; }
+.os-pilot-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; border-top: 1px solid var(--line); padding-top: 18px; }
+.os-pilot-actions > div { min-width: 0; }
+.os-pilot-actions .button { margin-top: 10px; }
+@media (max-width: 980px) {
+  .os-pilot-fields, .os-pilot-actions { grid-template-columns: 1fr; }
+  .os-pilot-rule { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 580px) {
+  .os-pilot-field-grid, .os-pilot-rule { grid-template-columns: 1fr; }
+}
 .sidebar-bottom {
   padding-top: 20px;
 }

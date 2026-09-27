@@ -20,7 +20,9 @@ export function registerShopifyRoutes(app: FastifyInstance, engine: GuardrailEng
     workspaceId: access.workspaceId, clientId: process.env.SHOPIFY_CLIENT_ID, clientSecret: process.env.SHOPIFY_CLIENT_SECRET ?? '',
     redirectUri: process.env.SHOPIFY_REDIRECT_URI ?? '', encryptionKey: process.env.CONNECTOR_ENCRYPTION_KEY ?? '',
     scopes: process.env.SHOPIFY_SCOPES?.split(',').map(scope => scope.trim()).filter(Boolean),
-  }), { webhookSecret: process.env.SHOPIFY_CLIENT_SECRET ?? '', webhookOrigin: process.env.SHOPIFY_WEBHOOK_ORIGIN }) : undefined);
+  }), { webhookSecret: process.env.SHOPIFY_CLIENT_SECRET ?? '', previousWebhookSecret: process.env.SHOPIFY_PREVIOUS_CLIENT_SECRET,
+    previousWebhookSecretValidUntil: process.env.SHOPIFY_PREVIOUS_CLIENT_SECRET_VALID_UNTIL,
+    webhookOrigin: process.env.SHOPIFY_WEBHOOK_ORIGIN }) : undefined);
   const required = () => { if (!service) throw new GuardrailError('SHOPIFY_NOT_CONFIGURED', 'Shopify app credentials and HTTPS callback must be configured in the guardrail service.', 503); return service; };
   app.get('/api/shopify', async request => {
     const actor = await access.owner(request);

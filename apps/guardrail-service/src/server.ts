@@ -85,6 +85,7 @@ export async function createServer(options:ServerOptions={}) {
   mutation('/pause/release','owner',(request,actor)=>engine.setPause(false,request.body,actor,key(request)),true);
   app.patch(`${base}/guardrails/config`,async request=>engine.updateConfig(request.body,await requireAccess(request,'owner',true),key(request)));
   app.patch(`${base}/constitution`,async request=>engine.updateConstitution(request.body,await requireAccess(request,'owner',true),key(request)));
+  mutation('/constitution/pilot/approve','owner',(request,actor)=>engine.approvePilot(request.body,actor,key(request)),true);
   mutation('/products/create','owner',(request,actor)=>engine.createProduct(request.body,actor,key(request)),true);
   mutation('/products/:id/update','owner',(request,actor)=>engine.updateProduct((request.params as {id:string}).id,request.body,actor,key(request)),true);
   mutation('/campaigns/:id/pause','owner',(request,actor)=>engine.pauseCampaign((request.params as {id:string}).id,request.body,actor,key(request)),true);

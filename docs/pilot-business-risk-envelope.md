@@ -4,6 +4,8 @@
 **Created:** 2026-09-24  
 **Authority:** The owner must supply and approve commercial facts and limits. This worksheet is not a guardrail configuration, an authorization to spend, or evidence of a viable business.
 
+**Owner update, 2026-09-24:** The pilot business and risk limits have not been decided. Every value below remains `UNKNOWN`; dependent real-money actions must stay blocked.
+
 Record a source, date and owner approval for each material figure. Leave missing values as `UNKNOWN`. Product research and model estimates may inform a proposal but do not become owner-approved policy.
 
 ## A1 — One pilot business
@@ -74,7 +76,7 @@ Define the threshold, measurement window, authoritative source, action (pause/re
 
 ## Gate A decision
 
-**Current result: NOT PASSED.** All pilot inputs and owner approval are outstanding. A later implementation must map the approved figures and stop rules into the versioned Business Constitution and deterministic guardrail checks, then verify that missing or stale approval denies consequential execution.
+**Current result: NOT PASSED — OWNER INPUT REQUIRED.** All pilot inputs and owner approval are outstanding. The local implementation now stores a typed pilot draft in the versioned Business Constitution, requires owner approval, invalidates that approval after any Constitution edit, and denies the Shopify development-store price path while approval is missing or stale. Its tests use synthetic fixture values solely to verify the technical contract. No real commercial values have been entered or authorized.
 
 | Approval record | Value |
 | --- | --- |
@@ -82,4 +84,3 @@ Define the threshold, measurement window, authoritative source, action (pause/re
 | Constitution version / workspace | UNKNOWN |
 | Approved date | UNKNOWN |
 | Evidence reference | UNKNOWN |
-

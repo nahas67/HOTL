@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { constitutionPatchSchema, productCreateSchema, productUpdateSchema, refundSchema } from '@hotl/schemas';
+import { constitutionPatchSchema, pilotApprovalRequestSchema, productCreateSchema, productUpdateSchema, refundSchema } from '@hotl/schemas';
 import { assertSameOrigin, integrationCreateSchema, integrationCredentialsSchema, integrationDisconnectSchema, integrationRevisionSchema, ownerHeaders, resolveSchema, simulationEnabled, upstream } from '@/lib/proxy';
 import { shopifyCookie, shopifyMutationSchema } from '@/lib/shopify-proxy';
 
@@ -39,6 +39,8 @@ async function handle(request: Request, context: { params: Promise<{ path: strin
       result = await upstream(guardrail, `/api/integration-catalog${id ? `?connectionId=${encodeURIComponent(z.string().max(200).parse(id))}` : ''}`, auth);
     } else if (route === 'constitution' && request.method === 'PATCH') {
       result = await upstream(guardrail, `${prefix}/constitution`, headers, 'PATCH', constitutionPatchSchema.parse(await request.json()));
+    } else if (route === 'constitution/pilot/approve' && request.method === 'POST') {
+      result = await upstream(guardrail, `${prefix}/constitution/pilot/approve`, headers, 'POST', pilotApprovalRequestSchema.parse(await request.json()));
     } else if (route === 'products/create' && request.method === 'POST') {
       result = await upstream(guardrail, `${prefix}/products/create`, headers, 'POST', productCreateSchema.parse(await request.json()));
     } else if (path.length === 3 && path[0] === 'products' && path[2] === 'update' && request.method === 'POST') {

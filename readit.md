@@ -335,3 +335,7 @@ modify the working demo state.
   workspace from the original prompt.
 - Do not turn local fixture receipts into production evidence or bypass unresolved
   operation locks. Preserve both the state files and their initialization markers.
+
+## 2026-09-24 Gates A–C continuation checkpoint
+
+The [latest verification](docs/gates-a-c-verification-2026-09-24.md) records the new typed pilot Constitution draft, owner approval and invalidation, stop-rule enforcement, cockpit editor, Shopify webhook secret-rotation window, second provider pre-write read, signed cross-workspace denial tests and local restore evidence. Repository checks passed: lint, typecheck, 408 distinct unit/integration tests, build and 11 isolated simulation browser tests. Native PostgreSQL restart/restore passed separately; changed Docker restore remains unrun without its daemon. The owner's pilot values remain `UNKNOWN`, so Gate A is not approved. No Shopify store, app or trusted HTTPS staging endpoint is set up, so Gate C is externally unverified. Gate D has not started.

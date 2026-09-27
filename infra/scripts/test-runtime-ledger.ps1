@@ -67,6 +67,7 @@ try {
     Invoke-Checked $pgCtl @('-D', $dataDir, '-m', 'fast', '-w', 'restart')
     $after = (& $psql @sqlArgs -t -A -c $digestSql | Out-String).Trim()
     if ($LASTEXITCODE -ne 0 -or $after -ne $before) { throw 'Persisted ledger changed across PostgreSQL restart.' }
+    Write-Output "Runtime ledger state/audit MD5 before and after restart: $before"
     # Restore a real logical backup into a second disposable database. The source
     # stays intact; the existing cluster roles allow the restored grants/bindings
     # to be exercised without exporting any application credentials.
@@ -79,6 +80,8 @@ try {
     $restored = (& $psql @restoreArgs -t -A -c $digestSql | Out-String).Trim()
     if ($LASTEXITCODE -ne 0 -or $restored -ne $before) { throw 'Restored state/audit differs from its backup source.' }
     if ((Get-FileHash -LiteralPath $backupPath -Algorithm SHA256).Hash -ne $backupHash) { throw 'Backup changed during restoration.' }
+    Write-Output "Restored runtime ledger state/audit MD5: $restored"
+    Write-Output "Custom-format backup SHA-256: $backupHash"
     Invoke-Checked $psql ($restoreArgs + @('-f', (Join-Path $repoRoot 'infra/scripts/verify-runtime-restore.sql')))
     $passed = $true
     Write-Output '[OK] Runtime ledger integration tests, database restart, backup/restore digest and restored authorization checks passed.'

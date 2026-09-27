@@ -10,6 +10,7 @@
 | Local owner cockpit and demo storefront | M3 — Integration verified | Isolated local browser checks across the local stack; simulated commerce only. |
 | Deterministic policy/guardrail API | M3 — Integration verified | Local policy, denial and HTTP/workflow integration checks; no real financial provider authority. |
 | Versioned Constitution and autonomy controls | M3 — Integration verified | Service/UI and local approval behavior; pilot capital/stop fields not yet owner-approved. |
+| Typed pilot business/risk envelope | M2 — Local verified | Schema, owner draft/approval API, cockpit editor and fail-closed price-path tests; all real owner values remain UNKNOWN and no pilot has been approved. |
 | LangGraph workflow, checkpoint and interrupts | M3 — Integration verified | Local guardrail round trip, restart and interrupt resume. |
 | Durable local ledger, audit and idempotency | M3 — Integration verified | Local file/HTTP and actual native PostgreSQL restart/restore drills; no externally anchored audit. |
 | Independent kill latch | M3 — Integration verified | Local isolated denial/recovery drills; deployed revocation unverified. |

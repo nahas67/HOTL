@@ -5,6 +5,17 @@ launcher remains a local simulation. This integration adds an owner-operated,
 explicitly allowlisted development-store price workflow inside guardrails. It does
 not enable autonomous price changes or writes to ordinary merchant stores.
 
+The [September 24 official Shopify contract review](shopify-official-contract-review.md)
+confirms the pinned mutation shape and records staging prerequisites and remaining
+rotation/monitoring gaps. Webhook signing can use the previous app secret for up to
+an hour after rotation. An isolated guardrail process may set
+`SHOPIFY_PREVIOUS_CLIENT_SECRET` together with an explicit UTC
+`SHOPIFY_PREVIOUS_CLIENT_SECRET_VALID_UNTIL` no more than one hour ahead; the
+service rejects incomplete, expired or indefinite rotation configuration and
+stops accepting the previous secret at expiry. Remove both settings afterward.
+The app's webhook payload API version is configured separately from the Admin
+GraphQL version and must be recorded in real Gate C evidence.
+
 ## Implemented sequence
 
 1. An authenticated owner starts installation. Guardrails bind the OAuth challenge
@@ -38,9 +49,10 @@ not enable autonomous price changes or writes to ordinary merchant stores.
    maximum price change, USD economics and the existing margin floor.
 6. A provider preflight confirms the exact shop, `plan.partnerDevelopment`, price
    and product revision. State must be fresh (120 seconds) and owner cost evidence
-   unexpired. Guardrails recheck policy and kill state after preflight. The service
-   sends one `productVariantsBulkUpdate` for one variant, with partial updates off,
-   then reads the provider again. Writes are never automatically retried.
+   unexpired. After checking policy, the service reads the provider a second time
+   and denies if that pre-state changed. It rechecks policy and kill state after
+   the final read, sends one `productVariantsBulkUpdate` for one variant with partial
+   updates off, then reads the provider again. Writes are never automatically retried.
 7. A matching response/read-back produces a staging receipt and durable audit entry
    before success. Uncertain outcomes remain unresolved. The cockpit shows jobs,
    inbox events, operations, receipts and read-only reconciliation evidence.

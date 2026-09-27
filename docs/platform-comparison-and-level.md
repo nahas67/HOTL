@@ -70,7 +70,7 @@ Separate code readiness from demonstrated business operation:
 
 | Dimension | HOTL rating | Reason |
 | --- | --- | --- |
-| Engineering and local failure handling | **L1: tested local prototype** | 371 local tests cover policy/audit, crash recovery, failed commit no-resend cases and an intercepted Shopify path. No provider has verified it. |
+| Engineering and local failure handling | **L1: tested local prototype** | The 2026-09-24 continuation record reports 408 passing local unit/integration tests plus 11 browser tests, including restore and intercepted Shopify paths. No provider has verified it. |
 | Production/staging operation | **L0: not demonstrated** | No hosted HTTPS callback, authorized merchant installation, live sync/webhook, real price receipt, independent deployed revocation or production monitoring. Deployment-target code is not staging proof. |
 | Broad autonomous commerce business | **L0: not operational** | No live products/sales, supply chain, paid acquisition, payments/returns, reconciled accounts or measured business outcomes. Simulation is not proof of a profitable business. |
 

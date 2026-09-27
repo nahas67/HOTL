@@ -159,4 +159,4 @@ grant an unimplemented or unverified capability.
 - Never treat historic idempotent allow results as fresh provider authorization.
 - Missing/corrupt storage or emergency state denies execution. Do not recreate it.
 - Keep local fixtures, actual provider evidence and unrun deployment checks distinct.
-- The repository has no initial Git commit; do not report a commit hash.
+- The first local source commit is `f83938ff51a0f5531998ed11380d55863f55ad2f`, tagged `hotl-baseline-2026-09-24`; see `evidence/gate-b1-source-control/README.md`. Report the exact current commit for later work.

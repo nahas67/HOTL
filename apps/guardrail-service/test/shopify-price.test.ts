@@ -10,6 +10,7 @@ import type { ShopifyOAuthService } from '../src/shopify-oauth.js';
 import type { ShopifyPricePort } from '../src/shopify-provider.js';
 import type { RuntimeStateStore } from '../src/stores/types.js';
 import type { EngineState } from '../src/types.js';
+import { completePilotDraft } from './pilot-fixture.js';
 
 // Transactional adapter fixture: failures can occur before commit or after commit
 // but before its acknowledgement. A fresh engine sees only the committed snapshot.
@@ -32,12 +33,20 @@ class FaultingStore implements RuntimeStateStore {
 const dirs: string[] = [];
 const actor = { type: 'owner' as const, id: 'merchant-owner' };
 afterEach(async () => { await Promise.all(dirs.splice(0).map(path => rm(path, { recursive: true, force: true }))); });
-async function fixture(extra: Partial<EngineOptions> = {}) {
+async function fixture(extra: Partial<EngineOptions> = {}, approvePilot = true) {
   const directory = await mkdtemp(join(tmpdir(), 'hotl-price-')); dirs.push(directory);
   const filePath = join(directory, 'state.json'), installationId = randomUUID(), now = new Date('2026-09-17T12:00:00.000Z');
   let stopped = false;
   const options: EngineOptions = { filePath, initializeEmptyFile: true, mode: 'live', seed: false, now: () => now, shopifyStagingShops: ['staging-shop.myshopify.com'], killSwitchReader: async () => ({ engaged: stopped }), ...extra };
   const engine = await createEngine(options);
+  let policyVersion = 1;
+  if (approvePilot) {
+    const drafted = await engine.updateConstitution({ expectedVersion: 1, reason: 'Owner records synthetic pilot limits for price tests',
+      pilotDraft: completePilotDraft() }, actor, 'fixture-pilot-draft');
+    const approved = await engine.approvePilot({ expectedVersion: (drafted.constitution as { version: number }).version,
+      reason: 'Owner approves synthetic pilot boundaries for price tests' }, actor, 'fixture-pilot-approval');
+    policyVersion = (approved.constitution as { version: number }).version;
+  }
   const variant: MerchantVariant = { installationId, ownerId: actor.id, variantId: 'gid://shopify/ProductVariant/123', productId: 'gid://shopify/Product/12', title: 'Test item', sku: 'T-1', price: '100.00', currency: 'USD', providerRevision: now.toISOString(), observedAt: now.toISOString(), revision: 1, requestId: 'fixture-read', economics: { landedCost: 30, estimatedCac: 5, category: 'Home', evidence: 'Owner supplied test cost', validUntil: '2026-09-18T12:00:00.000Z' } };
   await engine.extensionTransaction('integration.fixture', {}, actor, 'seed', state => {
     state.extensions!.shopifyOAuth = { version: 1, workspaceId: 'workspace', pending: [], installations: [{ id: installationId, workspaceId: 'workspace', ownerId: actor.id, shop: 'staging-shop.myshopify.com', clientId: 'fixture-client', revision: 1, scopes: ['read_products', 'write_products'], status: 'INSTALLED', createdAt: now.toISOString(), installedAt: now.toISOString(), expiresAt: '2026-09-18T12:00:00.000Z', refreshExpiresAt: '2026-10-01T12:00:00.000Z', encryptedTokens: 'fixture-not-a-real-token' }] };
@@ -48,10 +57,26 @@ async function fixture(extra: Partial<EngineOptions> = {}) {
   const port: ShopifyPricePort = { read: vi.fn(async () => ({ ...remote })), write: vi.fn(async (_productId, _id, price) => { remote = { ...remote, price, providerRevision: '2026-09-17T12:00:01.000Z' }; return { requestId: 'fixture-write' }; }), locations: async () => [] };
   const oauth = { accessToken: async () => ({ shop: 'staging-shop.myshopify.com', accessToken: 'fixture-token', revision: 1, scopes: ['write_products'] }) } as unknown as ShopifyOAuthService;
   const service = new ShopifyCommerceService(engine, oauth, { webhookSecret: 'fixture-secret', port: () => port, now: () => now });
-  const input = { installationId, variantId: variant.variantId, expectedRevision: 1, expectedConstitutionVersion: 1, price: '110.00', reason: 'Owner-reviewed staging price experiment' };
+  const input = { installationId, variantId: variant.variantId, expectedRevision: 1, expectedConstitutionVersion: policyVersion, price: '110.00', reason: 'Owner-reviewed staging price experiment' };
   return { engine, options, port, oauth, service, input, variant, now, setKill: () => { stopped = true; }, changeRemote: (price: string) => { remote = { ...remote, price, providerRevision: '2026-09-17T12:00:02.000Z' }; } };
 }
 describe('guarded Shopify staging price execution', () => {
+  it('denies a real-mode price proposal until the owner has approved the pilot envelope', async () => {
+    const f = await fixture({}, false);
+    expect(await f.engine.prepareShopifyPrice(f.input, actor, 'unapproved')).toMatchObject({ decision: 'deny', reason: 'PILOT_APPROVAL_REQUIRED' });
+    expect(f.port.write).not.toHaveBeenCalled();
+  });
+  it('applies owner stop rules before a new price proposal', async () => {
+    const f = await fixture();
+    await f.engine.extensionTransaction('integration.fixture.uncertain', {}, actor, 'uncertain-fixture', state => {
+      shopifyData(state).operations.push({ id: randomUUID(), ownerId: actor.id, installationRevision: 1,
+        input: { ...f.input, variantId: 'gid://shopify/ProductVariant/999' },
+        before: f.variant, createdAt: f.now.toISOString(), status: 'UNKNOWN' });
+      return { seeded: true };
+    });
+    expect(await f.engine.prepareShopifyPrice(f.input, actor, 'stop-rule')).toMatchObject({ decision: 'deny', reason: 'PILOT_STOP_UNCERTAIN_PROVIDER_OPERATIONS' });
+    expect(f.port.write).not.toHaveBeenCalled();
+  });
   it('durably proposes, dispatches once, reconciles, audits and replays without another write', async () => {
     const f = await fixture();
     const proposal = await f.engine.prepareShopifyPrice(f.input, actor, 'proposal');
@@ -194,7 +219,7 @@ describe('guarded Shopify staging price execution', () => {
     for (const cause of ['pause', 'policy', 'provider']) {
       const f = await fixture(), proposal = await f.engine.prepareShopifyPrice(f.input, actor, 'proposal');
       if (cause === 'pause') await f.engine.setPause(true, { reason: 'owner interruption' }, actor, 'pause');
-      if (cause === 'policy') await f.engine.updateConstitution({ expectedVersion: 1, reason: 'Owner changes active policy', maxPriceChangePct: 10 }, actor, 'policy');
+      if (cause === 'policy') await f.engine.updateConstitution({ expectedVersion: f.input.expectedConstitutionVersion, reason: 'Owner changes active policy', maxPriceChangePct: 10 }, actor, 'policy');
       if (cause === 'provider') f.changeRemote('102.00');
       expect(await f.service.execute(String(proposal.operationId), actor)).toMatchObject({ decision: 'deny', status: 'DENIED' }); expect(f.port.write).not.toHaveBeenCalled();
     }
@@ -212,6 +237,36 @@ describe('guarded Shopify staging price execution', () => {
     const compensation = await f.engine.prepareShopifyPrice({ ...f.input, price: '100.00', expectedRevision: 2, compensationFor: proposal.operationId }, actor, 'compensate');
     expect(compensation.decision).toBe('allow'); f.changeRemote('115.00');
     expect(await f.service.execute(String(compensation.operationId), actor)).toMatchObject({ reason: 'PROVIDER_RESOURCE_CHANGED' }); expect(f.port.write).toHaveBeenCalledTimes(1);
+  });
+  it('aborts when the merchant changes the price between preflight and the final provider read', async () => {
+    const f = await fixture(), proposal = await f.engine.prepareShopifyPrice(f.input, actor, 'proposal');
+    const read = f.port.read;
+    let reads = 0;
+    f.port.read = vi.fn(async variantId => {
+      reads++;
+      if (reads === 2) f.changeRemote('115.00');
+      return read(variantId);
+    });
+    expect(await f.service.execute(String(proposal.operationId), actor)).toMatchObject({
+      decision: 'deny', reason: 'PROVIDER_RESOURCE_CHANGED', status: 'DENIED',
+    });
+    expect(reads).toBe(2);
+    expect(f.port.write).not.toHaveBeenCalled();
+  });
+  it('rechecks emergency state after the final provider read', async () => {
+    const f = await fixture(), proposal = await f.engine.prepareShopifyPrice(f.input, actor, 'proposal');
+    const read = f.port.read;
+    let reads = 0;
+    f.port.read = vi.fn(async variantId => {
+      reads++;
+      if (reads === 2) f.setKill();
+      return read(variantId);
+    });
+    expect(await f.service.execute(String(proposal.operationId), actor)).toMatchObject({
+      decision: 'deny', reason: 'KILL_SWITCH_ENGAGED', status: 'DENIED',
+    });
+    expect(reads).toBe(2);
+    expect(f.port.write).not.toHaveBeenCalled();
   });
   it('refuses a normal merchant store even when its hostname was allowlisted for staging', async () => {
     const f = await fixture(), proposal = await f.engine.prepareShopifyPrice(f.input, actor, 'proposal');

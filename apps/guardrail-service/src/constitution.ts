@@ -1,4 +1,4 @@
-import { autonomyDomains, constitutionSchema, type BusinessConstitution, type GuardrailConfig } from '@hotl/schemas';
+import { autonomyDomains, constitutionSchema, emptyPilotDraft, type BusinessConstitution, type GuardrailConfig } from '@hotl/schemas';
 import type { EngineState } from './types.js';
 
 export function defaultConstitution(config:GuardrailConfig,now:string,legacy=false):BusinessConstitution {
@@ -6,7 +6,8 @@ export function defaultConstitution(config:GuardrailConfig,now:string,legacy=fal
     domains:Object.fromEntries(autonomyDomains.map(id=>[id,{mode:legacy?'MANUAL':'SUPERVISED',paused:false,maxAutoActionAmount:25}])),
     dailyAdSpendCeiling:config.dailyAdSpendCeiling,monthlyAdSpendCeiling:Math.min(1_000_000,config.dailyAdSpendCeiling*30),maxSupplierPurchase:500,maxAutonomousTransaction:100,
     autoRefundThreshold:config.autoRefundThreshold,marginFloor:config.marginFloor,maxPriceChangePct:25,permittedCountries:[],prohibitedCountries:[],prohibitedCategories:[],
-    hardRules:[],advisory:{interpretation:'Free-form goals, hardRules, and advisory text require human review; only typed policy fields are executable constraints.',countryRestrictions:'Countries are checked only against known product origin and explicit checkout destination. Missing origin or destination denies when country restrictions are configured; this is not jurisdiction compliance certification.'}});
+    hardRules:[],advisory:{interpretation:'Free-form goals, hardRules, and advisory text require human review; only typed policy fields are executable constraints.',countryRestrictions:'Countries are checked only against known product origin and explicit checkout destination. Missing origin or destination denies when country restrictions are configured; this is not jurisdiction compliance certification.'},
+    pilot:{draft:emptyPilotDraft()}});
 }
 export function addConstitution(state:EngineState,now:string,legacy:boolean) {
   state.schemaVersion=2;state.extensions??={};state.constitution=defaultConstitution(state.config,now,legacy);

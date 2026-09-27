@@ -8,7 +8,7 @@ import { shopifyPricePort, type ShopifyPricePort } from './shopify-provider.js';
 import { managedWebhookTopic, shopifyWebhookPort, type ManagedWebhookTopic, type ShopifyWebhookPort } from './shopify-webhooks.js';
 import { shopifyData, ownVariant, sameObservation, variantId, type MerchantVariant, type PriceOperation } from './shopify-state.js';
 
-type Options = { webhookSecret: string; webhookOrigin?: string; webhookPort?: (shop: string, token: string) => ShopifyWebhookPort;
+type Options = { webhookSecret: string; previousWebhookSecret?: string; previousWebhookSecretValidUntil?: string; webhookOrigin?: string; webhookPort?: (shop: string, token: string) => ShopifyWebhookPort;
   connector?: (shop: string, token: string) => CommerceConnector; port?: (shop: string, token: string) => ShopifyPricePort; now?: () => Date };
 const economicsSchema = z.object({ installationId: z.string().uuid(), variantId, expectedRevision: z.number().int().positive(),
   landedCost: z.number().min(0).max(1_000_000).multipleOf(0.01), estimatedCac: z.number().min(0).max(1_000_000).multipleOf(0.01),
@@ -21,7 +21,15 @@ function code(error: unknown) { return error instanceof GuardrailError ? error.c
 /** Durable reconciliation worker and provider orchestration; never exported to runtime agents. */
 export class ShopifyCommerceService {
   private active = false;
-  constructor(private engine: GuardrailEngine, readonly oauth: ShopifyOAuthService, private options: Options) {}
+  constructor(private engine: GuardrailEngine, readonly oauth: ShopifyOAuthService, private options: Options) {
+    const previous = options.previousWebhookSecret;
+    const until = options.previousWebhookSecretValidUntil;
+    if (previous !== undefined || until !== undefined) {
+      const expires = until ? Date.parse(until) : NaN;
+      if (!previous || previous === options.webhookSecret || !Number.isFinite(expires) || expires <= this.now().getTime() || expires > this.now().getTime() + 60 * 60 * 1000)
+        throw new GuardrailError('SHOPIFY_WEBHOOK_ROTATION_INVALID', 'The previous webhook secret requires a distinct secret and an expiry within one hour.', 503);
+    }
+  }
   private now() { return this.options.now?.() ?? new Date(); }
   private port(shop: string, token: string) { return this.options.port?.(shop, token) ?? shopifyPricePort(shop, token); }
   private webhookPort(shop: string, token: string) { return this.options.webhookPort?.(shop, token) ?? shopifyWebhookPort(shop, token); }
@@ -107,7 +115,10 @@ export class ShopifyCommerceService {
     });
   }
   async webhook(installationId: string, rawBody: Buffer, signature: string, deliveryId: string, topic: string) {
-    if (!verifyWebhookSignature({ provider: 'shopify', rawBody, signature, secret: this.options.webhookSecret })) throw new GuardrailError('INVALID_WEBHOOK', 'Webhook signature is invalid.', 401);
+    const current = verifyWebhookSignature({ provider: 'shopify', rawBody, signature, secret: this.options.webhookSecret });
+    const previous = this.options.previousWebhookSecret && Date.parse(this.options.previousWebhookSecretValidUntil ?? '') > this.now().getTime()
+      ? verifyWebhookSignature({ provider: 'shopify', rawBody, signature, secret: this.options.previousWebhookSecret }) : false;
+    if (!current && !previous) throw new GuardrailError('INVALID_WEBHOOK', 'Webhook signature is invalid.', 401);
     z.string().min(1).max(128).regex(/^[a-zA-Z0-9_-]+$/).parse(deliveryId);
     z.enum(['products/create', 'products/update', 'products/delete', 'inventory_levels/update', 'orders/create', 'orders/updated', 'app/uninstalled']).parse(topic);
     let parsed: unknown; try { parsed = JSON.parse(rawBody.toString('utf8')); } catch { throw new GuardrailError('INVALID_WEBHOOK', 'Webhook body is invalid.'); }

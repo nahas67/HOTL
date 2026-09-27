@@ -11,6 +11,7 @@ playwright-report/
 test-results/
 .medusa/
 .data/
+.repowise/
 .secrets/
 *.tsbuildinfo
 artifacts/

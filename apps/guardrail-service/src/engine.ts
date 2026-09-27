@@ -4,7 +4,7 @@ import { dirname } from 'node:path';
 import { hotlModeSchema, campaignSchema, checkoutSchema, commerceEventSchema, configPatchSchema, fromMinor, listingSchema, marginCheckSchema, pauseSchema, refundSchema, resolveSchema, runEventSchema, spendCheckSchema, spendCommitSchema, supplierOrderSchema, toMinor, type Actor, type AuditEntry, type CommerceOrder } from '@hotl/schemas';
 import { seedState } from './seed.js';
 import { addConstitution } from './constitution.js';
-import { autonomyDomains, constitutionSchema, constitutionPatchSchema, productCreateSchema, productUpdateSchema, campaignPauseSchema, type AutonomyDomain, type BusinessConstitution, type OwnerInterrupt } from '@hotl/schemas';
+import { autonomyDomains, constitutionSchema, constitutionPatchSchema, pilotApprovalRequestSchema, productCreateSchema, productUpdateSchema, campaignPauseSchema, type AutonomyDomain, type BusinessConstitution, type OwnerInterrupt } from '@hotl/schemas';
 import type { EngineState, KillState } from './types.js';
 import type { RuntimeStateStore } from './stores/types.js';
 import { priceRequest, priceCancellation, priceInvestigation, shopifyData, ownVariant, sameObservation, type PriceRequest, type PriceOperation, type PriceReceipt } from './shopify-state.js';
@@ -208,7 +208,55 @@ export class GuardrailEngine {
     if(state.paused||this.constitution(state).domains.catalog.paused)throw new GuardrailError('SYSTEM_PAUSED','Catalog action is paused.',403);
     return installation;
   }
-  private async shopifyPricePolicy(state:EngineState,input:PriceRequest,actor:Actor):Promise<Result|null> {
+  private pilotApprovalFailure(constitution:BusinessConstitution):string|null {
+    const envelope=constitution.pilot;
+    if(!envelope)return 'PILOT_ENVELOPE_REQUIRED';
+    const approval=envelope.approval;
+    if(!approval||approval.constitutionVersion!==constitution.version||approval.draftDigest!==digest(envelope.draft))return 'PILOT_APPROVAL_REQUIRED';
+    return null;
+  }
+  private pilotDraftFailure(constitution:BusinessConstitution):string|null {
+    const draft=constitution.pilot?.draft;
+    if(!draft)return 'PILOT_ENVELOPE_REQUIRED';
+    for(const field of Object.values(draft.profile))if(field.value===null||field.provenance==='ESTIMATED')return 'PILOT_PROFILE_INCOMPLETE';
+    if(draft.profile.currency.value!=='USD')return 'PILOT_CURRENCY_UNSUPPORTED';
+    for(const [name,field] of Object.entries(draft.economics)) {
+      if(field.value===null||field.provenance==='ESTIMATED')return 'PILOT_ECONOMICS_INCOMPLETE';
+      if(!['targetContribution','breakEvenCac','breakEvenRoas'].includes(name)&&field.provenance==='CALCULATED')return 'PILOT_ECONOMICS_SOURCE_REQUIRED';
+    }
+    for(const field of Object.values(draft.capital))if(field.value===null||field.provenance!=='OWNER_ENTERED')return 'PILOT_OWNER_LIMITS_REQUIRED';
+    const cap=draft.capital;
+    const v=(field:typeof cap.maxPilotCapital)=>Number(field.value);
+    const deployable=v(cap.maxPilotCapital)-v(cap.protectedReserve);
+    if(deployable<=0||v(cap.maxDailySpend)>v(cap.maxWeeklySpend)||v(cap.maxWeeklySpend)>v(cap.maxMonthlySpend)
+      ||[cap.maxDailySpend,cap.maxMonthlySpend,cap.maxAdvertisingExposure,cap.maxSupplierExposure,cap.maxInventoryExposure,cap.maxExperimentLoss,cap.maxRefundAuthority,cap.maxSingleAutonomousTransaction].some(field=>v(field)>deployable))return 'PILOT_LIMITS_CONFLICT';
+    if(constitution.dailyAdSpendCeiling>v(cap.maxDailySpend)||constitution.monthlyAdSpendCeiling>v(cap.maxMonthlySpend)
+      ||constitution.maxSupplierPurchase>v(cap.maxSupplierExposure)||constitution.maxAutonomousTransaction>v(cap.maxSingleAutonomousTransaction)
+      ||constitution.autoRefundThreshold>v(cap.maxRefundAuthority))return 'PILOT_CONSTITUTION_LIMITS_CONFLICT';
+    const required=['UNCERTAIN_PROVIDER_OPERATIONS','PROVIDER_RECONCILIATION_FAILURES'];
+    if(required.some(metric=>!draft.stopRules.some(rule=>rule.metric===metric&&rule.enabled&&rule.threshold>=1)))return 'PILOT_STOP_RULES_REQUIRED';
+    if(new Set(draft.stopRules.map(rule=>rule.metric)).size!==draft.stopRules.length)return 'PILOT_STOP_RULES_DUPLICATED';
+    if(draft.stopRules.some(rule=>rule.enabled&&!required.includes(rule.metric)))return 'PILOT_STOP_SIGNAL_UNAVAILABLE';
+    return null;
+  }
+  private pilotStopFailure(state:EngineState,input:PriceRequest,operationId?:string):string|null {
+    const rules=this.constitution(state).pilot?.draft.stopRules??[];
+    // The existing per-resource lock gives the specific denial for this variant.
+    // Global pilot stop rules cover other unresolved resources in the workspace.
+    const operations=shopifyData(state).operations.filter(item=>item.id!==operationId&&
+      (item.input.installationId!==input.installationId||item.input.variantId!==input.variantId));
+    for(const rule of rules) {
+      if(!rule.enabled)continue;
+      const observed=rule.metric==='UNCERTAIN_PROVIDER_OPERATIONS'
+        ?operations.filter(item=>['DISPATCHING','UNKNOWN','DRIFT'].includes(item.status)).length
+        :rule.metric==='PROVIDER_RECONCILIATION_FAILURES'
+          ?operations.filter(item=>item.status==='DRIFT').length:undefined;
+      if(observed===undefined)return 'PILOT_STOP_SIGNAL_UNAVAILABLE';
+      if(observed>=rule.threshold)return `PILOT_STOP_${rule.metric}`;
+    }
+    return null;
+  }
+  private async shopifyPricePolicy(state:EngineState,input:PriceRequest,actor:Actor,operationId?:string):Promise<Result|null> {
     this.owner(actor);
     const installation=assertShopifyInstallation(state,input.installationId,actor);
     if(this.mode!=='live'||!this.options.shopifyStagingShops?.includes(installation.shop))return deny('SHOPIFY_STAGING_CAPABILITY_DISABLED');
@@ -218,6 +266,9 @@ export class GuardrailEngine {
     if(state.paused)return deny('SYSTEM_PAUSED');
     const c=this.constitution(state);
     if(c.version!==input.expectedConstitutionVersion)return deny('CONSTITUTION_CHANGED');
+    const pilotFailure=this.pilotApprovalFailure(c);if(pilotFailure)return deny(pilotFailure);
+    if(c.pilot!.draft.profile.salesChannel.value!=='SHOPIFY_DEVELOPMENT_STORE'||c.pilot!.draft.profile.currency.value!=='USD')return deny('PILOT_CHANNEL_OR_CURRENCY_MISMATCH');
+    const stopFailure=this.pilotStopFailure(state,input,operationId);if(stopFailure)return deny(stopFailure);
     if(c.domains.pricing.paused||c.domains.catalog.paused)return deny('DOMAIN_PAUSED');
     if(!installation.scopes.includes('write_products'))return deny('PROVIDER_SCOPE_REQUIRED');
     const variant=ownVariant(state,input,actor);
@@ -298,13 +349,22 @@ export class GuardrailEngine {
       if(!operation||operation.status!=='DISPATCHING'||operation.claim!==claim)throw new GuardrailError('DISPATCH_CLAIM_INVALID','The operation is not dispatchable.',409);
       const reject=(result:Result)=>{operation.status='DENIED';operation.reason=String(result.reason);delete operation.claim;return {...result,operationId:id,status:operation.status};};
       try {assertShopifyInstallation(state,operation.input.installationId,actor,credentialRevision);if(operation.installationRevision!==credentialRevision)return reject(deny('INSTALLATION_CHANGED'));} catch{return reject(deny('INSTALLATION_CHANGED'));}
-      const blocked=await this.shopifyPricePolicy(state,operation.input,actor);if(blocked)return reject(blocked);
+      const blocked=await this.shopifyPricePolicy(state,operation.input,actor,id);if(blocked)return reject(blocked);
       let before;
       try {before=await port.read(operation.input.variantId);} catch(error){return reject(deny(error instanceof Error&&'code' in error&&error.code==='AUTHENTICATION_FAILED'?'SHOPIFY_AUTH_REQUIRED':'PROVIDER_PREFLIGHT_FAILED'));}
       if(before.developmentStore!==true)return reject(deny('DEVELOPMENT_STORE_REQUIRED'));
       if(!sameObservation(before,operation.before))return reject(deny('PROVIDER_RESOURCE_CHANGED'));
-      // The ledger lock serializes local owner edits through dispatch. Recheck emergency state after the provider read.
-      const finalBlock=await this.shopifyPricePolicy(state,operation.input,actor);if(finalBlock)return reject(finalBlock);
+      // A policy check can take time while the merchant edits the provider. Re-read before the
+      // write and reject any changed external pre-state; Shopify offers no conditional price CAS.
+      const intermediateBlock=await this.shopifyPricePolicy(state,operation.input,actor,id);if(intermediateBlock)return reject(intermediateBlock);
+      let latest;
+      try {latest=await port.read(operation.input.variantId);} catch(error){return reject(deny(error instanceof Error&&'code' in error&&error.code==='AUTHENTICATION_FAILED'?'SHOPIFY_AUTH_REQUIRED':'PROVIDER_PREFLIGHT_FAILED'));}
+      if(latest.developmentStore!==true)return reject(deny('DEVELOPMENT_STORE_REQUIRED'));
+      if(!sameObservation(latest,before))return reject(deny('PROVIDER_RESOURCE_CHANGED'));
+      before=latest;
+      // The ledger lock serializes local owner edits. Recheck emergency and owner policy after
+      // the last provider read so a kill or Constitution change during it still denies dispatch.
+      const finalBlock=await this.shopifyPricePolicy(state,operation.input,actor,id);if(finalBlock)return reject(finalBlock);
       const receipt:PriceReceipt={provider:'shopify',environment:'staging',operationId:id,workspaceId:assertShopifyInstallation(state,operation.input.installationId,actor).workspaceId,actorId:actor.id,authorization:{constitutionVersion:operation.input.expectedConstitutionVersion,resourceRevision:operation.input.expectedRevision,installationRevision:credentialRevision},dispatchedAt:this.now().toISOString(),completedAt:this.now().toISOString(),requestId:null,before,requestedPrice:operation.input.price,outcome:'UNKNOWN'};
       try {
         const response=await port.write(before.productId,before.variantId,operation.input.price);receipt.requestId=response.requestId;
@@ -613,7 +673,8 @@ export class GuardrailEngine {
       return {config:state.config,constitution:next,before,after:next,status:'updated',mode:this.mode};
     });
   }
-  private saveConstitution(state:EngineState,next:BusinessConstitution,actor:Actor,reason:string) {
+  private saveConstitution(state:EngineState,next:BusinessConstitution,actor:Actor,reason:string,preservePilotApproval=false) {
+    if(next.pilot?.approval&&!preservePilotApproval)delete next.pilot.approval;
     state.constitution=next;state.config={dailyAdSpendCeiling:next.dailyAdSpendCeiling,marginFloor:next.marginFloor,autoRefundThreshold:next.autoRefundThreshold,currency:'USD'};
     (state.constitutionHistory??=[]).push({version:next.version,constitution:structuredClone(next),changedAt:next.updatedAt,changedBy:actor.id,reason});
     for(const item of state.interrupts)if(item.status==='pending'&&!item.payload.legacyReviewRequired){item.status='expired';item.resolvedAt=this.now().toISOString();item.resolutionNote='Business Constitution changed; prepare a new proposal under the current version.';}
@@ -623,11 +684,12 @@ export class GuardrailEngine {
     return this.transaction('constitution.update',input,actor,key,state=>{
       const before=structuredClone(this.constitution(state));
       if(input.expectedVersion!==before.version)return deny('CONSTITUTION_CHANGED',{replan:true,currentConstitutionVersion:before.version});
-      const {expectedVersion:_expectedVersion,reason,domains:domainChanges,...fields}=input;
+      const {expectedVersion:_expectedVersion,reason,domains:domainChanges,pilotDraft,...fields}=input;
       const domains=structuredClone(before.domains);
       if(fields.mode&&fields.mode!=='CUSTOM')for(const domain of autonomyDomains)domains[domain].mode=fields.mode;
       for(const domain of autonomyDomains)if(domainChanges?.[domain])domains[domain]={...domains[domain],...domainChanges[domain]};
-      const next=constitutionSchema.parse({...before,...fields,domains,version:before.version+1,updatedAt:this.now().toISOString()});
+      const next=constitutionSchema.parse({...before,...fields,domains,pilot:pilotDraft?{draft:pilotDraft}:before.pilot,
+        version:before.version+1,updatedAt:this.now().toISOString()});
       if(domainChanges&&!fields.mode)next.mode='CUSTOM';
       if(next.mode!=='CUSTOM'&&autonomyDomains.some(domain=>next.domains[domain].mode!==next.mode))next.mode='CUSTOM';
       if(toMinor(next.dailyAdSpendCeiling)<this.spendUsage(state))return deny('CEILING_BELOW_COMMITTED_AND_RESERVED_SPEND');
@@ -635,6 +697,19 @@ export class GuardrailEngine {
       if(next.permittedCountries.some(country=>next.prohibitedCountries.includes(country)))return deny('COUNTRY_POLICY_CONFLICT');
       this.saveConstitution(state,next,actor,reason);
       return {decision:'allow',status:'updated',constitution:next,before,after:next,mode:this.mode};
+    });
+  }
+  async approvePilot(raw:unknown,actor:Actor,key:string) {
+    this.owner(actor);const input=pilotApprovalRequestSchema.parse(raw);
+    return this.transaction('constitution.pilot-approved',input,actor,key,state=>{
+      const before=structuredClone(this.constitution(state));
+      if(input.expectedVersion!==before.version)return deny('CONSTITUTION_CHANGED',{replan:true,currentConstitutionVersion:before.version});
+      const failure=this.pilotDraftFailure(before);if(failure)return deny(failure);
+      const next=constitutionSchema.parse({...before,version:before.version+1,updatedAt:this.now().toISOString(),
+        pilot:{draft:before.pilot!.draft,approval:{approvedBy:actor.id,approvedAt:this.now().toISOString(),
+          constitutionVersion:before.version+1,draftDigest:digest(before.pilot!.draft)}}});
+      this.saveConstitution(state,next,actor,input.reason,true);
+      return {decision:'allow',status:'approved',constitution:next,before,after:next};
     });
   }
   async createProduct(raw:unknown,actor:Actor,key:string) {
