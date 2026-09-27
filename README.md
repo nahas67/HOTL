@@ -10,6 +10,8 @@ Start with the [complete checkpoint](readit.md), [project current-state and prom
 and [current evidence](docs/continuation-verification.md).
 
 The owner-supplied [locked program plan](docs/locked-program-plan.md) sets the next evidence gates. [Gate A's pilot business and risk worksheet](docs/pilot-business-risk-envelope.md) records unknown owner inputs without treating them as approved policy.
+The AI's dated [pilot market and product recommendation](docs/pilot-ai-recommendation-2026-09-28.md) is a validation-only research choice; it does not authorize spending or set owner risk limits.
+The [Gate A–C owner actions guide](docs/gate-a-c-owner-next-actions.md) lists the business decisions and isolated Shopify staging prerequisites needed to resume the external proof.
 The [maturity register](docs/program-maturity-register.md) assigns one evidence level to each major capability, and [Gate B1 evidence](evidence/gate-b1-source-control/README.md) records the first local source-control baseline.
 The current [Gate A–C implementation mandate](docs/gates-a-c-implementation-mandate.md) is preserved verbatim. Gate B's [restore](evidence/gate-b-restore/README.md) and [staging preflight](evidence/gate-b-staging-readiness/README.md) results and the [Gate C evidence ledger](evidence/gate-c-first-shopify-proof/README.md) distinguish local checks from real provider proof.
 
