@@ -2,6 +2,8 @@
 
 This is a local engineering checkpoint for the [implementation mandate](gates-a-c-implementation-mandate.md). It does **not** certify real commerce, an external Shopify connection, a hosted deployment, or production readiness. The owner's current answer leaves every pilot business and risk value `UNKNOWN`; the authorized Shopify development store, development app and trusted HTTPS callback/webhook endpoints are not set up.
 
+**Implementation source commit:** `52aaaf9e4b5a020c1c718aa895db0c53f942e12f` (`Add Gate A envelope and Gate B/C safeguards`). The verification changes below were run on that source tree before its commit.
+
 ## Gate decisions
 
 | Gate | Current result | Evidence and missing condition |
