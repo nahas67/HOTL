@@ -343,3 +343,5 @@ The [latest verification](docs/gates-a-c-verification-2026-09-24.md) records the
 ## 2026-09-28 AI pilot recommendation checkpoint
 
 The [owner actions guide](docs/gate-a-c-owner-next-actions.md) is the next handoff. The owner asked AI to choose the direction, so [the dated research recommendation](docs/pilot-ai-recommendation-2026-09-28.md) selects a U.S./USD home-office cable-organization candidate for validation only. It is not a demand proof or spending authorization: the owner’s legal seller country, unit economics, capital/reserve and risk caps remain `UNKNOWN` until verified and approved in the cockpit. Shopify staging remains not set up, so Gate C is blocked. Keep provider and deployment secrets in the appropriate secret managers; never put them in the evidence ledger.
+
+The ordered [next Gates A–C working plan](next-gates-a-c-working-plan.md) is saved in the project root. It starts with evidence-led AI research, then owner approval and isolated staging prerequisites, and ends with real provider drills and an evidence freeze. Gate D remains out of scope.
