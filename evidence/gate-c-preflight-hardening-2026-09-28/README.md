@@ -3,7 +3,7 @@
 **Date:** 2026-09-28
 **Scope:** Safe local engineering and verification for the existing HOTL Gates A–C. Gate D and broad autonomy are explicitly out of scope.
 **Source snapshot:** `088f6412000c98f061f3e856cda753089fb25273` on `codex/gate-c-preflight-hardening`, initially clean.
-**Ending implementation commit:** to be filled after the focused source/evidence commit; the final evidence-only documentation commit may follow it.
+**Ending implementation commit:** `b76674685007b4fae311b6b99aae59dd479d5d71` (`Harden Gate C Shopify preflight and persisted state`). A later documentation-only commit finalizes this evidence record; it contains no implementation changes.
 
 ## Executive result
 
@@ -85,4 +85,4 @@ Reviewed 2026-09-28. See the repository's [dated contract review](../../docs/sho
 
 ## Source-control completion
 
-The implementation commit is the ending source snapshot for this package; its full SHA is recorded here after that focused commit. A subsequent documentation-only commit may finalize this evidence file and handoffs. The existing baseline tag and history are preserved. No remote push was available or attempted.
+The ending implementation commit is `b76674685007b4fae311b6b99aae59dd479d5d71`. A subsequent documentation-only commit finalizes this evidence file; it contains no implementation changes. The existing baseline tag and history are preserved. No remote push was available or attempted.

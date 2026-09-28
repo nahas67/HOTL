@@ -88,7 +88,7 @@ promotion. Normal-store writes and autonomous execution remain disabled.
 
 ## 2026-09-28 Gate C local preflight hardening
 
-This dated entry supplements, and does not replace, the September 23 and 24 evidence above. Starting source commit: `088f641` on branch `codex/gate-c-preflight-hardening`; initial working tree was clean. The code/evidence change commit is recorded in the [dated evidence package](../evidence/gate-c-preflight-hardening-2026-09-28/README.md). No remote is configured. Runtime simulation data, workflow checkpoints, and the independent kill journal were not included in the source diff or modified by the drills.
+This dated entry supplements, and does not replace, the September 23 and 24 evidence above. Starting source commit: `088f6412000c98f061f3e856cda753089fb25273` on branch `codex/gate-c-preflight-hardening`; initial working tree was clean. Ending implementation commit: `b76674685007b4fae311b6b99aae59dd479d5d71`. No remote is configured. Runtime simulation data, workflow checkpoints, and the independent kill journal were not included in the source diff or modified by the drills.
 
 | Check | Result | Scope and limit |
 | --- | --- | --- |
