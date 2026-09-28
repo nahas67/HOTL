@@ -46,3 +46,7 @@ Record sanitized provider and HOTL identifiers, timestamps, before/after values,
 An observed target price does not establish which actor changed it. If a provider response is lost, retain `UNKNOWN` and the resource lock until independently verifiable causal evidence supports a resolution. Never repeat a claimed write to manufacture a receipt. Run irreversible emergency-stop drills only in a dedicated staging instance; record failed or unconfigured revocation as such.
 
 Current local verification is in [continuation evidence](../../docs/continuation-verification.md). The [official contract review](../../docs/shopify-official-contract-review.md) records API details and deployment gaps. This Gate C package will be updated only after real authorized operations are performed.
+
+## Latest readiness checkpoint — 2026-09-28
+
+The latest [Gate C Shopify external evidence checkpoint](../gate-c-shopify-external-2026-09-28/README.md) reran the sanitized static preflight. It remains blocked with 19 missing staging fields. Active probes and all Shopify operations remain unrun/unverified; no provider request was sent. This date-stamped record does not change any external-evidence ledger row to PASS. The original ledger remains the collection template for actual authorized staging proof.

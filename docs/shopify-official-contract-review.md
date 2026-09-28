@@ -15,3 +15,9 @@ Reviewed 2026-09-28 against current official Shopify documentation. The runtime 
 | [Privacy compliance webhooks](https://shopify.dev/docs/apps/build/compliance/privacy-law-compliance) | Distribution requirements are broader than this single development-store pilot. | Keep app-store distribution as a later gate; do not claim it is implemented. |
 
 No official documentation finding changes the present evidence level: Shopify OAuth, sync, webhook and price paths remain **M2 local verified** in the [maturity register](program-maturity-register.md). The Gate C evidence package must record actual provider request IDs, app versions, store classification, confirmed old-secret revocation time and observed results without tokens or cookies. The contract pages were rechecked on 2026-09-28; research is not provider evidence.
+
+## 2026-09-28 external-evidence checkpoint
+
+The official versioned mutation and app documentation were rechecked for the requested real staging drill. API 2026-07 remains the current stable target for this checkpoint; 2026-10 is a release candidate and is not a reason to migrate. The existing server-side authorization-code OAuth pattern, expiring offline token handling, requested product/inventory/location scopes, one-product variant mutation, webhook lifecycle, secret rotation, and cost-based throttling remain consistent with the documented integration boundary. The installing user's product permission and actual granted scopes still require external verification.
+
+See the dated [Gate C evidence checkpoint](../evidence/gate-c-shopify-external-2026-09-28/README.md) and its [official-source baseline](../evidence/gate-c-shopify-external-2026-09-28/SHOPIFY_BASELINE.md). No Shopify request was made, so no provider contract behavior or negotiated API version was observed. There is no code/version change and no maturity promotion.

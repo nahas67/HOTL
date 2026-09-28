@@ -86,3 +86,5 @@ The repository includes Supabase SQL/RLS migrations, optional PostgreSQL/Redis/L
 The dashboard uses seeded historical metrics in simulation; actual demo orders, approvals, spend and action logs update as you interact. Model drafts use deterministic sample content by default; configured live model requests route exclusively through LiteLLM.
 
 See the `docs/` contracts and deployment runbooks for details. The original supplied prompt is retained there for traceability, with implementation corrections recorded separately.
+
+**Latest Gate C status (2026-09-28): BLOCKED.** The static preflight lists 19 missing staging settings, with no active probes or Shopify requests made. The authorized store/app, public HTTPS endpoints, isolated staging services, and approved Gate A business authority are still prerequisites. The [dated evidence package](evidence/gate-c-shopify-external-2026-09-28/README.md) records exact results and a sanitized preflight report; no capability was promoted to M4.

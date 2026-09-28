@@ -245,3 +245,7 @@ inspected during this implementation; documentation research is not provider evi
 - [Subscription query](https://shopify.dev/docs/api/admin-graphql/2026-07/queries/webhookSubscriptions)
 - [Subscription create mutation](https://shopify.dev/docs/api/admin-graphql/2026-07/mutations/webhookSubscriptionCreate)
 - [Webhook verification](https://shopify.dev/docs/apps/build/webhooks/verify-deliveries)
+
+## External Gate C evidence checkpoint — 2026-09-28
+
+The current static preflight is **BLOCKED** with 19 missing settings; active probes were not run because no staging endpoints exist. No OAuth, Shopify Admin API, webhook, or provider mutation request occurred. The complete status and sanitized preflight are in the [dated evidence package](../evidence/gate-c-shopify-external-2026-09-28/README.md). All Shopify capability maturity remains local/integration verified. The final provider read→write interval still has a residual external-edit race; this checkpoint did not measure it.

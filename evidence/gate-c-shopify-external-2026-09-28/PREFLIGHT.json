@@ -1,0 +1,188 @@
+{
+  "schemaVersion": 2,
+  "staticConfiguration": {
+    "status": "BLOCKED",
+    "evidenceScope": "STATIC_CONFIGURATION_ONLY",
+    "missing": [
+      {
+        "field": "HOTL_MODE",
+        "reason": "Must be live; the local simulation is not an external proof environment."
+      },
+      {
+        "field": "GUARDRAIL_WORKSPACE_ID",
+        "reason": "A dedicated canonical workspace UUID is required."
+      },
+      {
+        "field": "GUARDRAIL_DATABASE_URL",
+        "reason": "A dedicated guardrail PostgreSQL login is required."
+      },
+      {
+        "field": "SUPABASE_URL",
+        "reason": "Owner issuer must be a trusted HTTPS origin."
+      },
+      {
+        "field": "OWNER_USER_IDS",
+        "reason": "An explicit owner allowlist is required."
+      },
+      {
+        "field": "GUARDRAIL_AUTHORIZATION_VERSION",
+        "reason": "A positive authorization version is required."
+      },
+      {
+        "field": "AGENT_JWT_KEYS",
+        "reason": "A scoped signing-key ring is required."
+      },
+      {
+        "field": "HOTL_PUBLIC_ORIGIN",
+        "reason": "A trusted HTTPS owner origin is required."
+      },
+      {
+        "field": "SHOPIFY_REDIRECT_URI",
+        "reason": "The exact owner HTTPS callback must match the cockpit origin."
+      },
+      {
+        "field": "SHOPIFY_WEBHOOK_ORIGIN",
+        "reason": "A public HTTPS guardrail webhook origin is required."
+      },
+      {
+        "field": "SHOPIFY_CLIENT_ID",
+        "reason": "A development app ID is required."
+      },
+      {
+        "field": "SHOPIFY_CLIENT_SECRET",
+        "reason": "A development app secret is required in the guardrail environment."
+      },
+      {
+        "field": "SHOPIFY_STAGING_SHOPS",
+        "reason": "Exactly one explicitly allowlisted myshopify.com development store is required."
+      },
+      {
+        "field": "SHOPIFY_SCOPES",
+        "reason": "Required pilot read and product-write scopes are missing."
+      },
+      {
+        "field": "CONNECTOR_ENCRYPTION_KEY",
+        "reason": "A 32-byte base64 connector key is required."
+      },
+      {
+        "field": "KILL_SWITCH_URL",
+        "reason": "The emergency reader must use a trusted HTTPS root origin separate from the owner and webhook origins."
+      },
+      {
+        "field": "KILL_SWITCH_READ_TOKEN",
+        "reason": "A non-demo emergency read credential is required."
+      },
+      {
+        "field": "HOTL_BACKUP_RESTORE_TARGET",
+        "reason": "A named staging backup/restore target is required; this check does not prove a restore."
+      },
+      {
+        "field": "SHOPIFY_RECONCILIATION_MODE",
+        "reason": "Choose DURABLE_BACKGROUND, OWNER_MANUAL for a deliberately operated drill, or DISABLED."
+      }
+    ]
+  },
+  "workerReadiness": {
+    "ingress": "BLOCKED",
+    "worker": "BLOCKED",
+    "reconciliation": "BLOCKED",
+    "mode": "DISABLED"
+  },
+  "activeProbes": {
+    "status": "NOT_RUN",
+    "required": [
+      "HOTL_GUARDRAIL_READINESS_URL",
+      "HOTL_SHOPIFY_INGRESS_READINESS_URL",
+      "SHOPIFY_REDIRECT_URI",
+      "KILL_SWITCH_STATE_URL"
+    ],
+    "notProbed": [
+      "RUNTIME_DATABASE_DDL_PRIVILEGES",
+      "KILL_DEPLOYMENT_LOGICAL_INDEPENDENCE",
+      "BACKUP_RESTORE_DRILL",
+      "SHOPIFY_DEVELOPMENT_STORE_CONNECTIVITY",
+      "SHOPIFY_PROVIDER_WEBHOOK_DELIVERY"
+    ],
+    "results": []
+  },
+  "externalStagingVerified": false,
+  "readyForOperatorReview": false,
+  "failures": [
+    {
+      "field": "HOTL_MODE",
+      "reason": "Must be live; the local simulation is not an external proof environment."
+    },
+    {
+      "field": "GUARDRAIL_WORKSPACE_ID",
+      "reason": "A dedicated canonical workspace UUID is required."
+    },
+    {
+      "field": "GUARDRAIL_DATABASE_URL",
+      "reason": "A dedicated guardrail PostgreSQL login is required."
+    },
+    {
+      "field": "SUPABASE_URL",
+      "reason": "Owner issuer must be a trusted HTTPS origin."
+    },
+    {
+      "field": "OWNER_USER_IDS",
+      "reason": "An explicit owner allowlist is required."
+    },
+    {
+      "field": "GUARDRAIL_AUTHORIZATION_VERSION",
+      "reason": "A positive authorization version is required."
+    },
+    {
+      "field": "AGENT_JWT_KEYS",
+      "reason": "A scoped signing-key ring is required."
+    },
+    {
+      "field": "HOTL_PUBLIC_ORIGIN",
+      "reason": "A trusted HTTPS owner origin is required."
+    },
+    {
+      "field": "SHOPIFY_REDIRECT_URI",
+      "reason": "The exact owner HTTPS callback must match the cockpit origin."
+    },
+    {
+      "field": "SHOPIFY_WEBHOOK_ORIGIN",
+      "reason": "A public HTTPS guardrail webhook origin is required."
+    },
+    {
+      "field": "SHOPIFY_CLIENT_ID",
+      "reason": "A development app ID is required."
+    },
+    {
+      "field": "SHOPIFY_CLIENT_SECRET",
+      "reason": "A development app secret is required in the guardrail environment."
+    },
+    {
+      "field": "SHOPIFY_STAGING_SHOPS",
+      "reason": "Exactly one explicitly allowlisted myshopify.com development store is required."
+    },
+    {
+      "field": "SHOPIFY_SCOPES",
+      "reason": "Required pilot read and product-write scopes are missing."
+    },
+    {
+      "field": "CONNECTOR_ENCRYPTION_KEY",
+      "reason": "A 32-byte base64 connector key is required."
+    },
+    {
+      "field": "KILL_SWITCH_URL",
+      "reason": "The emergency reader must use a trusted HTTPS root origin separate from the owner and webhook origins."
+    },
+    {
+      "field": "KILL_SWITCH_READ_TOKEN",
+      "reason": "A non-demo emergency read credential is required."
+    },
+    {
+      "field": "HOTL_BACKUP_RESTORE_TARGET",
+      "reason": "A named staging backup/restore target is required; this check does not prove a restore."
+    },
+    {
+      "field": "SHOPIFY_RECONCILIATION_MODE",
+      "reason": "Choose DURABLE_BACKGROUND, OWNER_MANUAL for a deliberately operated drill, or DISABLED."
+    }
+  ]
+}

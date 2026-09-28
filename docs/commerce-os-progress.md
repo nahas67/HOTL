@@ -58,3 +58,7 @@ provider credential by itself grants a feature or overrides deterministic contro
 4. Add one other commerce domain at a time, applying the same authorization,
    durable audit, idempotency, recovery and external-evidence requirements.
 5. Measure outcomes in shadow mode before any owner-approved increase in autonomy.
+
+## Gate C external checkpoint — 2026-09-28
+
+The latest static preflight remains blocked with 19 missing staging fields, and no active probe or Shopify request was made. The owner has not set up the authorized development store/app or trusted HTTPS endpoints, and Gate A owner authority remains incomplete. See the [dated evidence package](../evidence/gate-c-shopify-external-2026-09-28/README.md). Keep the existing owner-operated, development-store-only boundary; no maturity promotion or Gate D work is authorized by this result.

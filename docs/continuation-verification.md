@@ -112,3 +112,22 @@ The 19 static-preflight fields still missing are `HOTL_MODE`, `GUARDRAIL_WORKSPA
 Gate A is **PARTIALLY VERIFIED / OWNER INPUT REQUIRED**: no legal seller country, verified landed costs/tax treatment, capital/reserve, exposure caps, refund limit or stop thresholds were invented or approved. Gate B is **PARTIALLY VERIFIED / STAGING BLOCKED**: local persistence/security drills passed, but hosted identity, the isolated hosted workspace/database and RLS, independently deployed kill/revocation, external backup restore and monitoring remain unverified. Gate C is **LOCAL VERIFIED / EXTERNAL STAGING BLOCKED**: no authorized Shopify development store/app or trusted HTTPS endpoints exist, so no OAuth install, live webhook, provider price write, Shopify-side revocation or external evidence occurred. No Shopify capability was promoted to M4 and Gate D did not start.
 
 The remaining material code risk is the Shopify owner/provider read→write race: Shopify exposes no generic compare-and-swap for this operation. HOTL retains the provider read, policy check, provider re-read, final local/emergency check and write sequence; this narrows but cannot eliminate an external edit in the final gap. Provider calls still run while the serialized transaction is held; documented wait budgets and timeout tests cover only this narrow one-variant workflow, not scale or hard end-to-end latency guarantees.
+
+## 2026-09-28 Gate C external evidence attempt
+
+Starting commit: 4596836b0210c70f7ef84bb036e320eea8a216e5 on branch codex/gate-c-preflight-hardening; the tree was clean. The authorized Shopify development store/app and trusted HTTPS callback/webhook endpoints remain unset per the owner. Gate A still lacks approved business/legal inputs and a cockpit-recorded authorization.
+
+| Check | Result | Scope |
+| --- | --- | --- |
+| Static staging preflight, node scripts/staging-readiness.mjs --json | **BLOCKED as expected** | 19 required fields missing; ingress, worker and reconciliation blocked; active probes not run; externalStagingVerified false. Sanitized output: evidence/gate-c-shopify-external-2026-09-28/PREFLIGHT.json. |
+| Shopify official contract research | **REVIEWED** | Official documentation reviewed 2026-09-28. API 2026-07 remains the stable target; 2026-10 is release candidate. No concrete incompatibility or reason to migrate was found. |
+| Targeted Shopify/economics tests | **PASSED: 134 tests / 11 files** | Guardrail provider, price flow, corrupt persisted state, OAuth, sync, webhook/rotation, routes, tenant isolation, and Gate A economics. These are local tests, not external evidence. |
+| Staging readiness tests | **PASSED: 9 tests** | Local static/active separation and redaction behavior. |
+| Active read-only probes | **NOT RUN** | No configured staging endpoints; no external requests made. |
+| Shopify OAuth, read sync, webhook, price mutation, receipt/read-back, revocation | **UNVERIFIED or BLOCKED** | No Shopify request or installation occurred. |
+
+No live provider credential was found in the reviewed scan results, no secret values were placed in the evidence, and static code-path review found no Shopify write outside the guardrail provider boundary. Tenant-isolation evidence remains local only. No application code or dependencies changed. Existing state files and emergency journals were preserved.
+
+Gate A remains **OWNER INPUT REQUIRED**. Gate B staging remains **BLOCKED**. Gate C is **GATE C BLOCKED — external staging prerequisites absent**. No Shopify capability was promoted to M4; all related capabilities retain M2 local/integration maturity. The residual provider read→write race remains and was not measured externally. See the complete [dated evidence package](../evidence/gate-c-shopify-external-2026-09-28/README.md).
+
+Next checkpoint remains the unresolved Gate C prerequisite set: authenticated owner approval of the business/risk envelope plus isolated staging identity/database/emergency controls and the authorized Shopify development store/app with trusted HTTPS endpoints. Do not begin Gate D.

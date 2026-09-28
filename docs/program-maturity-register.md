@@ -32,3 +32,5 @@
 | Domain autonomy eligibility | M0 — Not implemented | No prespecified production evaluation gate has passed. |
 
 M0 on a **real business capability** can coexist with a simulated workflow for that domain. `M3` here means locally verified cross-service integration; it does not imply `M4` external staging. No Shopify capability was promoted by the 2026-09-28 local hardening. The first planned promotion target is the bounded Shopify development-store path after the real evidence in [Gate C](locked-program-plan.md) is produced.
+
+**2026-09-28 external evidence review:** The new [Gate C evidence checkpoint](../evidence/gate-c-shopify-external-2026-09-28/README.md) reran static preflight and confirmed that external staging is still blocked. No live Shopify request occurred. OAuth, sync, webhook, guarded price, and preflight maturity therefore remain **M2 — local/integration verified**; no capability was promoted to M4. The external blocker is infrastructure/authority availability, not a failed mocked or intercepted provider test.
