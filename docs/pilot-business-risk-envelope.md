@@ -42,9 +42,42 @@ Use one row per product or variant in an attached, owner-reviewed calculation. C
 | Expected return cost | UNKNOWN | — |
 | Expected fulfillment cost | UNKNOWN | — |
 | Tax handling and reserves | UNKNOWN | — |
-| Expected contribution margin | UNKNOWN | Requires complete inputs |
-| Break-even customer acquisition cost | UNKNOWN | Requires complete inputs |
-| Break-even return on ad spend | UNKNOWN | Requires complete inputs |
+| Tax and duty cost per order | UNKNOWN | Required separately; unknown is never treated as zero |
+| Target contribution per order | UNKNOWN | Currency amount after all modeled per-order variable costs, including planned advertising acquisition |
+| Break-even customer acquisition cost (CAC) | UNKNOWN | Currency amount available for acquisition before advertising cost |
+| Break-even return on ad spend (ROAS) | UNKNOWN | Dimensionless revenue-to-break-even-CAC ratio, displayed with `×` |
+
+### Deterministic formula and types
+
+HOTL stores money as a non-negative currency amount with at most two decimal
+places, ROAS as a non-negative ratio with at most four decimal places, and stop
+rates as fractions from 0 through 1. These are distinct schema types. A ratio
+of `1.9608` means `$1.9608` of revenue per `$1` of advertising spend; `0.20` is
+a 20% fraction, not a 20x ratio.
+
+For the currently implemented per-order model, let `AOV` be expected order value,
+`nonAdCosts` the sum of supplier product cost, inbound/outbound freight,
+packaging, store fees, payment fees, refund allowance, return allowance,
+fulfillment expense and tax/duty, and `plannedAdCost` the advertising acquisition
+cost per order:
+
+```text
+breakEvenCAC       = AOV - nonAdCosts
+targetContribution = breakEvenCAC - plannedAdCost
+breakEvenROAS      = AOV / breakEvenCAC
+```
+
+The model rounds currency inputs and derived currency values to cents, and ROAS
+to four decimal places. A positive break-even CAC is required. If any component
+is `UNKNOWN` or merely `ESTIMATED`, if CAC is zero/negative, or if a derived
+contribution would be negative, derived outputs cannot be approved. A value
+marked `CALCULATED` must carry formula version
+`HOTL-PILOT-UNIT-ECONOMICS-v1` and exactly match the deterministic result.
+Owner-entered derived amounts are not overwritten or silently recomputed; they
+must match the formula before approval, and the owner must review and explicitly
+correct any mismatch. Historical stored drafts remain readable, but the guardrail
+blocks derived values that do not satisfy the current formula until reviewed and
+reapproved.
 
 ## A3 — Capital envelope
 

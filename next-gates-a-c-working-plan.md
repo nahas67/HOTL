@@ -21,6 +21,14 @@ Complete and evidence the existing Gates A–C in the isolated staging environme
 - [ ] **Run failure drills:** Exercise normal-store/unauthorized denial, stale approval, pause/kill, duplicate/concurrent requests, webhook retry, uncertain outcome, restart, reconciliation and supported compensation/revocation. **Verify:** no unauthorized write or blind retry; state and audit survive restart.
 - [ ] **Freeze and verify:** Update evidence ledger, maturity and verification records; run relevant DB/browser drills and `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build`. **Verify:** each check is passed or marked unrun with reason, records agree, all evidence is committed, and work stops before Gate D.
 
+## Local hardening result — 2026-09-28
+
+The independent local portion of the plan is complete: strict Shopify persisted-state schemas and fail-closed corruption tests; deterministic typed pilot economics; evidence-accurate webhook queue/reconciliation states; current Shopify secret-rotation behavior with explicit finite overlap and revocation handling; worker readiness; static/active preflight separation; timing coverage; current-state handoff and dated evidence. See [the evidence package](evidence/gate-c-preflight-hardening-2026-09-28/README.md) and [verification ledger](docs/continuation-verification.md#2026-09-28-gate-c-local-preflight-hardening).
+
+Verification passed for lint, workspace typecheck, package/root tests, build, isolated browser tests, the native migration/authorization drill and the native PostgreSQL runtime restart/backup-restore drill. Docker restore is **UNRUN — DOCKER DAEMON UNAVAILABLE**. Static preflight is intentionally blocked with 19 missing settings; active probes were not run. This does not satisfy external staging.
+
+The next work is owner/infrastructure work: confirm legitimate Gate A business inputs and record approval in the authenticated cockpit; provision the dedicated hosted Gate B identity/database/RLS/backups and separately deployed emergency service; then create the authorized Shopify development store/app and trusted HTTPS callback/webhook. Only after these prerequisites exist should an operator run preflight probes and the controlled Gate C drill. Gate D remains out of scope.
+
 ## Done when
 
 Gates A, B and C each have their required owner or external evidence, denial/recovery results and committed documentation. If a prerequisite remains unavailable, record the blocker and preserve the gate as blocked; do not substitute simulation evidence or an AI estimate.

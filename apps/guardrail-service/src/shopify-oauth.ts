@@ -14,15 +14,35 @@ const installationSchema = z.object({
   expiresAt: z.string().datetime().nullable(), refreshExpiresAt: z.string().datetime().nullable(),
   encryptedTokens: z.string().nullable(),
   refreshUntil: z.string().datetime().nullable().optional(),
+}).strict().superRefine((item, context) => {
+  if (item.status === 'INSTALLED' && (!item.installedAt || !item.expiresAt || !item.refreshExpiresAt || !item.encryptedTokens))
+    context.addIssue({ code: z.ZodIssueCode.custom, message: 'An installed Shopify reference requires encrypted credentials and token dates.' });
+  if (item.encryptedTokens) {
+    const parts = item.encryptedTokens.split('.');
+    const decoded = parts.map(part => Buffer.from(part, 'base64'));
+    if (parts.length !== 3 || parts.some((part, index) => !part || decoded[index].toString('base64') !== part)
+      || decoded[0]?.length !== 12 || decoded[1]?.length !== 16 || decoded[2]?.length === 0)
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ['encryptedTokens'], message: 'Encrypted credential envelope is malformed.' });
+  }
 });
 const pendingSchema = z.object({
   id: z.string().uuid(), installationId: z.string().uuid(), installationRevision: z.number().int().positive(),
-  stateHash: z.string().length(64), browserHash: z.string().length(64),
+  stateHash: z.string().regex(/^[a-f0-9]{64}$/), browserHash: z.string().regex(/^[a-f0-9]{64}$/),
   expiresAt: z.string().datetime(), status: z.enum(['pending', 'exchanging', 'completed', 'failed', 'superseded']),
-});
-const storedSchema = z.object({ version: z.literal(1), workspaceId: z.string().min(1), installations: z.array(installationSchema), pending: z.array(pendingSchema) });
+}).strict();
+const storedSchema = z.object({ version: z.literal(1), workspaceId: z.string().min(1), installations: z.array(installationSchema), pending: z.array(pendingSchema) }).strict();
 type StoredInstallation = z.infer<typeof installationSchema>;
-type OAuthState = z.infer<typeof storedSchema>;
+export type ShopifyOAuthState = z.infer<typeof storedSchema>;
+export function validateShopifyOAuthState(value: unknown): boolean {
+  const parsed = storedSchema.safeParse(value);
+  if (!parsed.success) return false;
+  const { installations, pending } = parsed.data;
+  return installations.every(item => item.workspaceId === parsed.data.workspaceId)
+    && new Set(installations.map(item => item.id)).size === installations.length
+    && new Set(installations.map(item => item.shop)).size === installations.length
+    && new Set(pending.map(item => item.id)).size === pending.length
+    && pending.every(item => installations.some(installation => installation.id === item.installationId && installation.revision >= item.installationRevision));
+}
 export type ShopifyInstallation = Omit<StoredInstallation, 'encryptedTokens' | 'clientId'>;
 const tokenSchema = z.object({
   access_token: z.string().min(10).max(4096), refresh_token: z.string().min(10).max(4096),
@@ -38,19 +58,19 @@ const DEFAULT_SCOPES = ['read_products', 'write_products', 'read_inventory', 're
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');
 function fail(code: string, message: string, status = 409): never { throw new GuardrailError(code, message, status); }
 function owner(actor: Actor) { if (actor.type !== 'owner') fail('OWNER_REQUIRED', 'Shopify installation management requires an owner.', 403); }
-function data(state: EngineState, workspaceId?: string): OAuthState {
+function data(state: EngineState, workspaceId?: string): ShopifyOAuthState {
   state.extensions ??= {};
   if (state.extensions.shopifyOAuth === undefined) {
     if (!workspaceId) fail('SHOPIFY_INSTALLATION_NOT_FOUND', 'Shopify installation was not found.', 404);
-    const initial: OAuthState = { version: 1, workspaceId, installations: [], pending: [] };
+    const initial: ShopifyOAuthState = { version: 1, workspaceId, installations: [], pending: [] };
     state.extensions.shopifyOAuth = initial;
     return initial;
   }
   const parsed = storedSchema.safeParse(state.extensions.shopifyOAuth);
-  if (!parsed.success) fail('SHOPIFY_STATE_INVALID', 'Shopify installation storage is invalid; restore it before continuing.', 503);
+  if (!parsed.success || !validateShopifyOAuthState(state.extensions.shopifyOAuth)) fail('SHOPIFY_STATE_INVALID', 'Shopify installation storage is invalid; restore it before continuing.', 503);
   if (workspaceId && parsed.data.workspaceId !== workspaceId) fail('WORKSPACE_MISMATCH', 'Shopify storage belongs to a different workspace.', 403);
   // Validate without replacing the object: callers mutate this transaction's state.
-  return state.extensions.shopifyOAuth as OAuthState;
+  return state.extensions.shopifyOAuth as ShopifyOAuthState;
 }
 function metadata(item: StoredInstallation): ShopifyInstallation {
   const { encryptedTokens: _tokens, clientId: _clientId, ...safe } = item;

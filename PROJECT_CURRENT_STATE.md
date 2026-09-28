@@ -1,6 +1,6 @@
 # HOTL Project Current State and Prompt-Engineer Handoff
 
-**Snapshot date:** 2026-09-24  
+**Snapshot date:** 2026-09-28
 **Repository:** `C:\Users\nahas\OneDrive\Desktop\HOTL`  
 **Purpose:** Give a prompt engineer and technical reviewer a detailed, loss-resistant picture of what this project is, what is implemented, what evidence exists, what remains, and which constraints must remain in force.
 
@@ -244,8 +244,10 @@ Suggested reviewer output: requirement-to-status traceability matrix; factual co
 
 ---
 
-**Snapshot caveat:** This document reflects repository records and implementation files inspected on 2026-09-24. Where evidence is dated 2026-09-23 or earlier, that date is stated. A file, migration, test, mock receipt or planned deployment is not proof of a hosted/live capability. Refresh this snapshot after material code, deployment or evidence changes.
+**Snapshot caveat:** The historical sections and addenda retain their own dates. This current snapshot was refreshed on 2026-09-28; see the Gate C local-hardening addendum and its dated evidence package below. A file, migration, test, mock receipt or planned deployment is not proof of a hosted/live capability.
 
 **September 24 source-control addendum:** Initial local source commit `f83938ff51a0f5531998ed11380d55863f55ad2f` and annotated tag `hotl-baseline-2026-09-24` now exist. The preserved [locked program plan](docs/locked-program-plan.md), [maturity register](docs/program-maturity-register.md), [Gate A worksheet](docs/pilot-business-risk-envelope.md), and [Gate B1 evidence](evidence/gate-b1-source-control/README.md) govern the next review. No real provider or hosted evidence was added by this source-control step.
 
 **September 24 implementation addendum:** The newer [Gates A–C verification](docs/gates-a-c-verification-2026-09-24.md) supersedes the test totals and immediate gate details in Sections 10–11 above. The typed pilot business/risk draft, owner approval/invalidation, cockpit editor, local Shopify pre-write race guard, webhook-secret rotation, cross-workspace tests and restore evidence are now implemented or recorded. Current release checks passed with 408 distinct unit/integration tests and 11 local browser tests. Gate A remains owner-input-required, Gate B remains staging-incomplete, and Gate C has no external Shopify proof. The original Sections 10–11 are retained as the dated earlier snapshot, not as current evidence.
+
+**2026-09-28 Gate C local-preflight hardening checkpoint:** See the [dated verification record](docs/continuation-verification.md#2026-09-28-gate-c-local-preflight-hardening) and [evidence package](evidence/gate-c-preflight-hardening-2026-09-28/README.md). The local work adds strict fail-closed Shopify persisted-state validation, deterministic and typed pilot economics, status-accurate webhook reconciliation, finite Shopify secret-rotation handling aligned to current Shopify documentation, explicit worker/readiness modes, and separate static versus opt-in read-only staging probes. Full local checks, isolated browser tests, and native PostgreSQL migration/restart/backup-restore drills passed. The Docker drill is unrun because the Docker daemon is unavailable. Static preflight lists the missing staging inputs and correctly reports external verification false. Gate A remains **PARTIALLY VERIFIED / OWNER INPUT REQUIRED**; Gate B remains **PARTIALLY VERIFIED / STAGING BLOCKED**; Gate C remains **LOCAL VERIFIED / EXTERNAL STAGING BLOCKED**. No Gate D work began, no capability was promoted to M4, and no real Shopify action occurred.

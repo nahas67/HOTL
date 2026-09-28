@@ -1,6 +1,6 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT, type JWTVerifyGetKey } from 'jose';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { createEngine } from '../src/engine.js';
 import { createServer } from '../src/server.js';
 import { shopifyData } from '../src/shopify-state.js';
@@ -50,9 +50,11 @@ async function fixture(workspaceId: string, ownerId: string) {
   const observedAt = new Date().toISOString();
   const variant = {
     installationId, ownerId, variantId, productId: 'gid://shopify/Product/12', title: 'Private fixture item',
-    sku: 'PRIVATE-SKU', price: '100.00', currency: 'USD', providerRevision: 'private-revision',
+    sku: 'PRIVATE-SKU', price: '100.00', currency: 'USD', providerRevision: observedAt,
     requestId: null, revision: 1, observedAt,
   };
+  const { installationId: _installationId, ownerId: _ownerId, title: _title, sku: _sku, revision: _revision, observedAt: _observedAt, ...beforeObservation } = variant;
+  const afterObservation = { ...beforeObservation, price: '105.00', providerRevision: new Date(Date.parse(observedAt) + 1000).toISOString() };
   const input = { installationId, variantId, expectedRevision: 1, expectedConstitutionVersion: 1,
     price: '105.00', reason: 'Owner reviewed the private fixture price' };
   await engine.extensionTransaction('integration.isolation.seed', { installationId }, { type: 'owner', id: ownerId }, `seed-${workspaceId}-${ownerId}`, state => {
@@ -60,25 +62,28 @@ async function fixture(workspaceId: string, ownerId: string) {
     state.extensions.shopifyOAuth = { version: 1, workspaceId, installations: [{
       id: installationId, workspaceId, ownerId, shop: 'isolation-fixture.myshopify.com',
       clientId: 'isolation-fixture-client', revision: 1, scopes: ['read_products', 'write_products'],
-      status: 'INSTALLED', createdAt: observedAt, installedAt: observedAt, expiresAt: null,
-      refreshExpiresAt: null, encryptedTokens: 'sealed-fixture-only',
+      status: 'INSTALLED', createdAt: observedAt, installedAt: observedAt,
+      expiresAt: new Date(Date.parse(observedAt) + 86400000).toISOString(),
+      refreshExpiresAt: new Date(Date.parse(observedAt) + 86400000 * 7).toISOString(),
+      encryptedTokens: [Buffer.alloc(12, 1).toString('base64'), Buffer.alloc(16, 2).toString('base64'), Buffer.from('{}').toString('base64')].join('.'),
     }], pending: [] };
     const commerce = shopifyData(state);
     commerce.variants.push(variant);
-    commerce.snapshots.push({ installationId, ownerId, observedAt,
-      products: [{ id: 'private-product' }], inventory: [], orders: [], locations: [] });
+    commerce.snapshots.push({ installationId, ownerId, observedAt, products: [], inventory: [], orders: [], locations: [] });
     commerce.jobs.push({ id: randomUUID(), installationId, ownerId, status: 'PENDING', attempts: 0, createdAt: observedAt });
-    commerce.inbox.push({ id: randomUUID(), installationId, ownerId, digest: 'private-digest', deliveryId: 'private-delivery',
+    commerce.inbox.push({ id: randomUUID(), installationId, ownerId, digest: createHash('sha256').update('private-digest').digest('hex'), deliveryId: 'private-delivery',
       topic: 'products/update', receivedAt: observedAt, status: 'PENDING', attempts: 0 });
     commerce.operations.push({ id: operationId, ownerId, installationRevision: 1, input, before: variant,
       createdAt: observedAt, status: 'CONFIRMED', receipt: {
         provider: 'shopify', environment: 'staging', operationId, workspaceId, actorId: ownerId,
         authorization: { constitutionVersion: 1, resourceRevision: 1, installationRevision: 1 },
         dispatchedAt: observedAt, completedAt: observedAt, requestId: 'private-provider-request',
-        before: variant, requestedPrice: '105.00', outcome: 'CONFIRMED',
+        before: beforeObservation, after: afterObservation, requestedPrice: '105.00', outcome: 'CONFIRMED',
       } });
     commerce.operations.push({ id: unresolvedId, ownerId, installationRevision: 1, input, before: variant,
-      createdAt: observedAt, status: 'UNKNOWN', investigations: [{
+      createdAt: observedAt, status: 'UNKNOWN', receipt: { provider: 'shopify', environment: 'staging', operationId: unresolvedId, workspaceId, actorId: ownerId,
+        authorization: { constitutionVersion: 1, resourceRevision: 1, installationRevision: 1 }, dispatchedAt: observedAt, completedAt: observedAt,
+        requestId: null, before: beforeObservation, requestedPrice: '105.00', outcome: 'UNKNOWN' }, investigations: [{
         id: randomUUID(), at: observedAt, reviewerId: ownerId, expectedStatus: 'UNKNOWN',
         expectedReconciliationAt: null, expectedReconciliationRevision: null,
         nextStep: 'KEEP_RESOURCE_BLOCKED', note: 'Provider result still needs independent confirmation.',

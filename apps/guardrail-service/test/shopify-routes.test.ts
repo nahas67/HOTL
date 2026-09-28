@@ -6,10 +6,12 @@ import { join, resolve, sep } from 'node:path';
 import { createEngine } from '../src/engine.js';
 import { createServer } from '../src/server.js';
 import { shopifyData } from '../src/shopify-state.js';
+import type { EngineState } from '../src/types.js';
 
 const base = '/api/guardrails/v1/shopify';
 const secret = 'http-fixture-shopify-secret-not-real';
 const shop = 'http-fixture.myshopify.com';
+const encryptedFixture = [Buffer.alloc(12, 1).toString('base64'), Buffer.alloc(16, 2).toString('base64'), Buffer.from('{}').toString('base64')].join('.');
 const ownerHeaders = { 'x-hotl-internal-token': 'http-fixture-internal', 'idempotency-key': 'http-fixture-key' };
 const directories: string[] = [];
 const servers: Awaited<ReturnType<typeof createServer>>[] = [];
@@ -30,6 +32,7 @@ async function fixture() {
   vi.stubEnv('SHOPIFY_REDIRECT_URI', 'https://hotl.example.org/api/shopify/oauth/callback');
   vi.stubEnv('CONNECTOR_ENCRYPTION_KEY', Buffer.alloc(32, 7).toString('base64'));
   vi.stubEnv('SHOPIFY_WORKER_ENABLED', 'false');
+  vi.stubEnv('SHOPIFY_RECONCILIATION_MODE', 'OWNER_MANUAL');
   vi.stubEnv('SHOPIFY_SCOPES', 'read_products,write_products,read_inventory,read_locations');
   const fetch = vi.fn<typeof globalThis.fetch>(async () => { throw new Error('Unexpected external request in HTTP fixture'); });
   vi.stubGlobal('fetch', fetch);
@@ -57,7 +60,36 @@ async function fixture() {
   return { app, engine, filePath, fetch, start, install };
 }
 
+function addInstallationFixture(state: EngineState, installationId: string) {
+  const now = new Date(), installedAt = now.toISOString();
+  state.extensions ??= {};
+  state.extensions.shopifyOAuth = { version: 1, workspaceId: 'http-workspace', pending: [], installations: [{
+    id: installationId, workspaceId: 'http-workspace', ownerId: 'simulation-owner', shop, clientId: 'http-fixture-client',
+    revision: 1, scopes: ['read_products', 'write_products'], status: 'INSTALLED', createdAt: installedAt,
+    installedAt, expiresAt: new Date(now.getTime() + 3_600_000).toISOString(),
+    refreshExpiresAt: new Date(now.getTime() + 86_400_000).toISOString(), encryptedTokens: encryptedFixture,
+  }] };
+}
+
 describe('Shopify HTTP authorization and delivery boundaries', () => {
+  it('does not present simulation endpoints as live ingress or database readiness', async () => {
+    const f = await fixture();
+    expect((await f.app.inject({ url: '/health/ready' })).statusCode).toBe(503);
+    const ingress = await f.app.inject({ url: '/api/shopify/webhooks/health' });
+    expect(ingress.statusCode).toBe(503);
+    expect(ingress.json()).toMatchObject({ status: 'not_ready', ingressReady: false, workerReady: false, reconciliationReady: false });
+    expect(f.fetch).not.toHaveBeenCalled();
+  });
+
+  it('honors an explicitly disabled reconciliation mode on the owner worker route', async () => {
+    const f = await fixture();
+    vi.stubEnv('SHOPIFY_RECONCILIATION_MODE', 'DISABLED');
+    const response = await f.app.inject({ method: 'POST', url: `${base}/worker`, headers: ownerHeaders, payload: {} });
+    expect(response.statusCode).toBe(503);
+    expect(response.json().error.code).toBe('SHOPIFY_WORKER_DISABLED');
+    expect(shopifyData(await f.engine.snapshot()).jobs).toEqual([]);
+  });
+
   it('requires authenticated owners across every private Shopify route', async () => {
     const f = await fixture(), id = randomUUID();
     const paths = ['install', `installations/${id}/sync`, `installations/${id}/subscriptions/ensure`, `installations/${id}/disconnect`, 'economics', 'prices/propose', `prices/${id}/execute`, `prices/${id}/reconcile`, `prices/${id}/cancel`, `prices/${id}/investigations`, 'worker'];
@@ -99,13 +131,14 @@ describe('Shopify HTTP authorization and delivery boundaries', () => {
     const f = await fixture(), id = randomUUID(), installationId = randomUUID();
     const reason = 'Owner withdrew the proposed staging price';
     await f.engine.extensionTransaction('integration.http-fixture.price', { id }, { type: 'owner', id: 'simulation-owner' }, 'seed-price', state => {
+      addInstallationFixture(state, installationId);
       shopifyData(state).operations.push({
         id, ownerId: 'simulation-owner', installationRevision: 1,
         input: { installationId, variantId: 'gid://shopify/ProductVariant/123', expectedRevision: 1,
           expectedConstitutionVersion: 1, price: '110.00', reason: 'Previously reviewed price proposal' },
         before: { installationId, ownerId: 'simulation-owner', variantId: 'gid://shopify/ProductVariant/123',
           productId: 'gid://shopify/Product/12', title: 'Fixture item', sku: 'FIXTURE', price: '100.00',
-          currency: 'USD', providerRevision: 'fixture-revision', observedAt: new Date().toISOString(),
+          currency: 'USD', providerRevision: new Date().toISOString(), observedAt: new Date().toISOString(),
           revision: 1, requestId: null },
         createdAt: new Date().toISOString(), status: 'PENDING',
       });
@@ -127,12 +160,19 @@ describe('Shopify HTTP authorization and delivery boundaries', () => {
   it('records an unresolved investigation through the owner HTTP route without clearing the lock', async () => {
     const f = await fixture(), id = randomUUID(), installationId = randomUUID();
     await f.engine.extensionTransaction('integration.http-fixture.unknown-price', { id }, { type: 'owner', id: 'simulation-owner' }, 'seed-unknown', state => {
+      addInstallationFixture(state, installationId);
       shopifyData(state).operations.push({ id, ownerId: 'simulation-owner', installationRevision: 1,
         input: { installationId, variantId: 'gid://shopify/ProductVariant/123', expectedRevision: 1, expectedConstitutionVersion: 1,
           price: '110.00', reason: 'Owner reviewed the staging price proposal' },
         before: { installationId, ownerId: 'simulation-owner', variantId: 'gid://shopify/ProductVariant/123', productId: 'gid://shopify/Product/12',
-          title: 'Fixture', sku: 'FIXTURE', price: '100.00', currency: 'USD', providerRevision: 'fixture', observedAt: new Date().toISOString(), revision: 1, requestId: null },
-        createdAt: new Date().toISOString(), status: 'UNKNOWN' });
+          title: 'Fixture', sku: 'FIXTURE', price: '100.00', currency: 'USD', providerRevision: new Date().toISOString(), observedAt: new Date().toISOString(), revision: 1, requestId: null },
+        createdAt: new Date().toISOString(), status: 'UNKNOWN', receipt: {
+          provider: 'shopify', environment: 'staging', operationId: id, workspaceId: 'http-workspace', actorId: 'simulation-owner',
+          authorization: { constitutionVersion: 1, resourceRevision: 1, installationRevision: 1 },
+          dispatchedAt: new Date().toISOString(), completedAt: new Date().toISOString(), requestId: null,
+          before: { variantId: 'gid://shopify/ProductVariant/123', productId: 'gid://shopify/Product/12', price: '100.00',
+            currency: 'USD', providerRevision: new Date().toISOString(), requestId: null }, requestedPrice: '110.00', outcome: 'UNKNOWN',
+        } });
       return { seeded: true };
     });
     const body = { expectedStatus: 'UNKNOWN', expectedReconciliationAt: null, expectedReconciliationRevision: null, nextStep: 'KEEP_RESOURCE_BLOCKED',

@@ -37,6 +37,9 @@ describe('pilot business and risk envelope', () => {
     expect(await engine.approvePilot({ expectedVersion: 3, reason }, owner, 'no-stop-approve')).toMatchObject({ decision: 'deny', reason: 'PILOT_STOP_RULES_REQUIRED' });
     draft.stopRules = completePilotDraft().stopRules;
     draft.economics.supplierProductCost = { value: 30, provenance: 'ESTIMATED', evidenceRef: 'AI generated guess' };
+    draft.economics.targetContribution = { value: null, provenance: 'UNKNOWN' };
+    draft.economics.breakEvenCac = { value: null, provenance: 'UNKNOWN' };
+    draft.economics.breakEvenRoas = { value: null, provenance: 'UNKNOWN' };
     await engine.updateConstitution({ expectedVersion: 3, reason, pilotDraft: draft }, owner, 'estimated-cost');
     expect(await engine.approvePilot({ expectedVersion: 4, reason }, owner, 'estimated-cost-approve')).toMatchObject({ decision: 'deny', reason: 'PILOT_ECONOMICS_INCOMPLETE' });
     expect((await engine.snapshot()).constitution!.pilot!.approval).toBeUndefined();

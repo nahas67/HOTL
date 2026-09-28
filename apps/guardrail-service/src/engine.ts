@@ -4,12 +4,12 @@ import { dirname } from 'node:path';
 import { hotlModeSchema, campaignSchema, checkoutSchema, commerceEventSchema, configPatchSchema, fromMinor, listingSchema, marginCheckSchema, pauseSchema, refundSchema, resolveSchema, runEventSchema, spendCheckSchema, spendCommitSchema, supplierOrderSchema, toMinor, type Actor, type AuditEntry, type CommerceOrder } from '@hotl/schemas';
 import { seedState } from './seed.js';
 import { addConstitution } from './constitution.js';
-import { autonomyDomains, constitutionSchema, constitutionPatchSchema, pilotApprovalRequestSchema, productCreateSchema, productUpdateSchema, campaignPauseSchema, type AutonomyDomain, type BusinessConstitution, type OwnerInterrupt } from '@hotl/schemas';
+import { autonomyDomains, constitutionSchema, constitutionPatchSchema, pilotApprovalRequestSchema, pilotEconomicsCalculationIssues, productCreateSchema, productUpdateSchema, campaignPauseSchema, type AutonomyDomain, type BusinessConstitution, type OwnerInterrupt } from '@hotl/schemas';
 import type { EngineState, KillState } from './types.js';
 import type { RuntimeStateStore } from './stores/types.js';
-import { priceRequest, priceCancellation, priceInvestigation, shopifyData, ownVariant, sameObservation, type PriceRequest, type PriceOperation, type PriceReceipt } from './shopify-state.js';
+import { priceRequest, priceCancellation, priceInvestigation, shopifyData, ownVariant, sameObservation, validateShopifyCommerceState, type PriceRequest, type PriceOperation, type PriceReceipt } from './shopify-state.js';
 import type { ShopifyPricePort } from './shopify-provider.js';
-import { assertShopifyInstallation } from './shopify-oauth.js';
+import { assertShopifyInstallation, validateShopifyOAuthState } from './shopify-oauth.js';
 
 export class GuardrailError extends Error {
   constructor(public code:string,message:string,public statusCode=400,public details:Record<string,unknown>={}) { super(message); }
@@ -20,6 +20,27 @@ const stable = (value:unknown):string => JSON.stringify(value,(_key,item) => ite
 const digest = (value:unknown) => createHash('sha256').update(stable(value)).digest('hex');
 const deny = (reason:string,extra:Result={}):Result => ({decision:'deny',reason,...extra});
 const DAY = (date:Date) => date.toISOString().slice(0,10);
+function shopifyReferenceIssue(state:EngineState):string|null {
+  const commerceRaw=state.extensions?.shopifyCommerce;
+  if(commerceRaw===undefined)return null;
+  const commerce=commerceRaw as {variants:{installationId:string;ownerId:string}[];snapshots:{installationId:string;ownerId:string}[];
+    jobs:{installationId:string;ownerId:string}[];inbox:{installationId:string;ownerId:string}[];
+    operations:{ownerId:string;input:{installationId:string};receipt?:{workspaceId:string}}[];
+    subscriptionAttempts?:{installationId:string;ownerId:string}[]};
+  const references=[...commerce.variants,...commerce.snapshots,...commerce.jobs,...commerce.inbox,
+    ...(commerce.subscriptionAttempts??[]),...commerce.operations.map(item=>({installationId:item.input.installationId,ownerId:item.ownerId}))];
+  if(!references.length)return null;
+  const oauth=state.extensions?.shopifyOAuth as {workspaceId:string;installations:{id:string;workspaceId:string;ownerId:string}[]}|undefined;
+  if(!oauth)return 'INSTALLATION_STATE_MISSING';
+  const installations=new Map(oauth.installations.map(item=>[item.id,item]));
+  if(!references.every(reference=>{
+    const installation=installations.get(reference.installationId);
+    return installation?.workspaceId===oauth.workspaceId&&installation.ownerId===reference.ownerId;
+  }))return 'INSTALLATION_REFERENCE_MISMATCH';
+  if(!commerce.operations.every(operation=>!operation.receipt||
+    installations.get(operation.input.installationId)?.workspaceId===operation.receipt.workspaceId))return 'RECEIPT_WORKSPACE_MISMATCH';
+  return null;
+}
 
 export class GuardrailEngine {
   private state:EngineState;
@@ -77,6 +98,11 @@ export class GuardrailEngine {
   }
   private verify(state:EngineState) {
     if(!state||state.version!==1 || !Array.isArray(state.audit)||state.audit.length===0) throw new GuardrailError('STATE_INVALID','Unrecognized or empty persistent audit state; refusing writes.',503);
+    if(state.extensions!==undefined&&(!state.extensions||typeof state.extensions!=='object'||Array.isArray(state.extensions)))throw new GuardrailError('STATE_INVALID','Persistent extension state is malformed; refusing writes.',503);
+    if(state.extensions?.shopifyCommerce!==undefined&&!validateShopifyCommerceState(state.extensions.shopifyCommerce))throw new GuardrailError('SHOPIFY_STATE_INVALID','Persisted Shopify commerce state is invalid; restore it before continuing.',503);
+    if(state.extensions?.shopifyOAuth!==undefined&&!validateShopifyOAuthState(state.extensions.shopifyOAuth))throw new GuardrailError('SHOPIFY_STATE_INVALID','Persisted Shopify installation state is invalid; restore it before continuing.',503);
+    const shopifyReferenceError=shopifyReferenceIssue(state);
+    if(shopifyReferenceError)throw new GuardrailError('SHOPIFY_STATE_INVALID',`Shopify commerce records failed ${shopifyReferenceError}; restore them before continuing.`,503,{reason:shopifyReferenceError});
     let previous:string|null=null;
     for(const entry of state.audit) {
       const {hash,...record}=entry;
@@ -130,6 +156,7 @@ export class GuardrailEngine {
       return structuredClone(existing.result);
     }
     const result=await action(state);
+    this.verify(state);
     this.audit(state,actor,operation,{request:payload,result,mode:this.mode},this.summary(operation,result));
     state.idempotency[ledgerKey]={fingerprint,result:structuredClone(result)};
     return result;
@@ -224,6 +251,7 @@ export class GuardrailEngine {
       if(field.value===null||field.provenance==='ESTIMATED')return 'PILOT_ECONOMICS_INCOMPLETE';
       if(!['targetContribution','breakEvenCac','breakEvenRoas'].includes(name)&&field.provenance==='CALCULATED')return 'PILOT_ECONOMICS_SOURCE_REQUIRED';
     }
+    if(pilotEconomicsCalculationIssues(draft as Parameters<typeof pilotEconomicsCalculationIssues>[0]).length)return 'PILOT_ECONOMICS_CALCULATION_INVALID';
     for(const field of Object.values(draft.capital))if(field.value===null||field.provenance!=='OWNER_ENTERED')return 'PILOT_OWNER_LIMITS_REQUIRED';
     const cap=draft.capital;
     const v=(field:typeof cap.maxPilotCapital)=>Number(field.value);

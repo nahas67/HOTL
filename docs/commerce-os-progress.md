@@ -1,6 +1,8 @@
 # Commerce OS: implemented scope and remaining work
 
-Updated 2026-09-23. The detailed implementation sequence is in
+Updated 2026-09-28. Gate C local preflight hardening is recorded in
+[the preflight hardening evidence](../evidence/gate-c-preflight-hardening-2026-09-28/README.md).
+The detailed implementation sequence is in
 [production-continuation.md](../production-continuation.md); current evidence is in
 [continuation-verification.md](continuation-verification.md). The user's 100-section
 Commerce OS specification is in [commerce-os-build-prompt.md](commerce-os-build-prompt.md).
@@ -19,8 +21,10 @@ safety drills are proven.
 | Stop controls | Reversible pause; independent persistent, irreversible kill latch. | Local isolated drills. Independent deployed revocation remains unverified. |
 | Agent runtime | LangGraph workflows, bounded department roles, checkpoints, interrupts and LiteLLM routing contracts. | Sample/deterministic outputs by default; real key provisioning and hosted runtime unverified. |
 | Identity | Workspace-bound owner/agent token verification, short lifetimes, revocation and scope reduction. | Signed fixtures and local HTTP tests; hosted Supabase/Auth unverified. |
+| Gate A unit economics | Distinct amount/ratio/fraction schemas; deterministic modeled contribution, break-even CAC and ROAS; mismatches fail approval. | Local schema/engine/UI tests with synthetic inputs. Owner values and pilot approval remain UNKNOWN. |
 | Connector SDK | Canonical product, inventory and order types; Shopify 2026-07 and WooCommerce read adapters; encrypted connector data and network constraints. | Intercepted requests/fixtures; no real merchants connected. |
-| Shopify guarded path | Browser-bound OAuth/token vault, durable read sync/webhook inbox, owner-triggered shop-scoped subscription registration, cost evidence, owner price proposal/cancel/execute, development-store check, read-back, receipts, reconciliation and owner investigation annotations. | Local code/tests only. No real merchant installation, subscription/delivery, or price mutation yet. Uncertain-price clearance, autonomous writes and ordinary-store price changes disabled. |
+| Shopify guarded path | Browser-bound OAuth/token vault; strict persisted OAuth/commerce state schemas and owner/workspace/job reference checks; status-accurate durable webhook inbox/retry/dead-letter; explicit credential rotation; worker mode and Gate C preflight v2; owner price proposal/cancel/execute, read-back, receipts and investigation. | M2/local checks only. No real merchant installation, secret revocation, subscription/delivery, or price mutation. External staging remains blocked. Uncertain-price clearance, autonomous writes and ordinary-store price changes disabled. |
+| Gate C readiness report | Exact static missing-field list; opt-in read-only HTTPS callback, guardrail, ingress and emergency-reader probes; explicit manual/durable/disabled worker reporting. | Local tests only. It cannot prove Shopify connectivity/delivery, deployment independence, DDL denial or restore. |
 | Persistence | File ledger, initialization markers, checkpoint recovery, independent kill journal and private PostgreSQL transactional runtime ledger. | Native PostgreSQL restart and same-cluster dump/restore passed; hosted, cross-cluster and Docker restore unverified. |
 
 ## What is still missing

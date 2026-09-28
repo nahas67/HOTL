@@ -5,10 +5,15 @@ import { GuardrailError, type GuardrailEngine } from './engine.js';
 import { ShopifyOAuthService } from './shopify-oauth.js';
 import { ShopifyCommerceService } from './shopify-service.js';
 
-type Access = { owner(request: FastifyRequest): Promise<Actor>; key(request: FastifyRequest): string; workspaceId: string; service?: ShopifyCommerceService };
+type Access = { owner(request: FastifyRequest): Promise<Actor>; key(request: FastifyRequest): string; workspaceId: string; mode: 'simulation'|'live'; service?: ShopifyCommerceService };
 const empty = (request: FastifyRequest) => z.object({}).strict().parse(request.body ?? {});
 const id = (request: FastifyRequest) => z.object({ id: z.string().uuid() }).parse(request.params).id;
 const header = (request: FastifyRequest, name: string) => typeof request.headers[name] === 'string' ? request.headers[name] as string : '';
+const reconciliationMode = () => {
+  const configured = process.env.SHOPIFY_RECONCILIATION_MODE;
+  if (configured === 'DURABLE_BACKGROUND' || configured === 'OWNER_MANUAL' || configured === 'DISABLED') return configured;
+  return process.env.SHOPIFY_WORKER_ENABLED === 'true' ? 'DURABLE_BACKGROUND' : 'OWNER_MANUAL';
+};
 
 export function registerShopifyRoutes(app: FastifyInstance, engine: GuardrailEngine, access: Access) {
   const requestKey = (request: FastifyRequest) => {
@@ -21,9 +26,16 @@ export function registerShopifyRoutes(app: FastifyInstance, engine: GuardrailEng
     redirectUri: process.env.SHOPIFY_REDIRECT_URI ?? '', encryptionKey: process.env.CONNECTOR_ENCRYPTION_KEY ?? '',
     scopes: process.env.SHOPIFY_SCOPES?.split(',').map(scope => scope.trim()).filter(Boolean),
   }), { webhookSecret: process.env.SHOPIFY_CLIENT_SECRET ?? '', previousWebhookSecret: process.env.SHOPIFY_PREVIOUS_CLIENT_SECRET,
+    previousWebhookSecretRevokedAt: process.env.SHOPIFY_PREVIOUS_CLIENT_SECRET_REVOKED_AT,
     previousWebhookSecretValidUntil: process.env.SHOPIFY_PREVIOUS_CLIENT_SECRET_VALID_UNTIL,
     webhookOrigin: process.env.SHOPIFY_WEBHOOK_ORIGIN }) : undefined);
   const required = () => { if (!service) throw new GuardrailError('SHOPIFY_NOT_CONFIGURED', 'Shopify app credentials and HTTPS callback must be configured in the guardrail service.', 503); return service; };
+  app.get('/api/shopify/webhooks/health', async (_request, reply) => {
+    const mode = reconciliationMode();
+    if (access.mode !== 'live' || !service || mode === 'DISABLED') return reply.status(503).send({ status: 'not_ready', ingressReady: false, workerReady: false, reconciliationReady: false });
+    return { status: 'ready', ingressReady: true, workerReady: mode === 'DURABLE_BACKGROUND',
+      reconciliationReady: true, reconciliationMode: mode };
+  });
   app.get('/api/shopify', async request => {
     const actor = await access.owner(request);
     return service ? service.overview(actor) : { configured: false, installations: [], variants: [], jobs: [], inbox: [], operations: [], capabilities: { priceWrite: 'IMPLEMENTED_UNVERIFIED', autonomousPriceWrite: 'DISABLED' } };
@@ -62,7 +74,11 @@ export function registerShopifyRoutes(app: FastifyInstance, engine: GuardrailEng
   app.post(`${base}/prices/:id/investigations`, async request => { const actor = await access.owner(request); return engine.recordShopifyPriceInvestigation(id(request), request.body, actor, requestKey(request)); });
   app.post(`${base}/prices/:id/execute`, async request => { const actor = await access.owner(request); empty(request); return required().execute(id(request), actor, requestKey(request)); });
   app.post(`${base}/prices/:id/reconcile`, async request => { const actor = await access.owner(request); empty(request); return required().reconcile(id(request), actor, access.key(request)); });
-  app.post(`${base}/worker`, async request => { const actor = await access.owner(request); empty(request); requestKey(request); return required().workOnce(actor); });
+  app.post(`${base}/worker`, async request => {
+    const actor = await access.owner(request); empty(request); requestKey(request);
+    if (reconciliationMode() === 'DISABLED') throw new GuardrailError('SHOPIFY_WORKER_DISABLED', 'Shopify reconciliation is explicitly disabled.', 503);
+    return required().workOnce(actor);
+  });
   app.register(async hooks => {
     hooks.removeContentTypeParser('application/json');
     hooks.addContentTypeParser('application/json', { parseAs: 'buffer', bodyLimit: 2 * 1024 * 1024 }, (_request, body, done) => done(null, body));
@@ -71,7 +87,7 @@ export function registerShopifyRoutes(app: FastifyInstance, engine: GuardrailEng
       return reply.status(202).send(result);
     });
   });
-  if (service && process.env.SHOPIFY_WORKER_ENABLED === 'true') {
+  if (service && reconciliationMode() === 'DURABLE_BACKGROUND') {
     let running: Promise<unknown> | undefined;
     const timer = setInterval(() => {
       if (!running) running = service.workOnce().catch(() => app.log.error({ code: 'SHOPIFY_WORKER_FAILED' }, 'Shopify worker pass failed; durable work retained.')).finally(() => { running = undefined; });

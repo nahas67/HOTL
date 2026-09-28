@@ -3,12 +3,13 @@ import { createHttpClient, shopifyEndpoint } from '@hotl/connector-sdk/transport
 import { ConnectorError, type ConnectorOptions } from '@hotl/connector-sdk';
 import { decimal, variantId, type PriceObservation } from './shopify-state.js';
 
+export const SHOPIFY_PRICE_HTTP_TIMEOUT_MS = 4000;
 const observed = z.object({ id: variantId, price: z.string(), product: z.object({ id: z.string().regex(/^gid:\/\/shopify\/Product\/[1-9]\d*$/), updatedAt: z.string().datetime() }) });
 export type ShopifyPricePort = { read(id: string): Promise<PriceObservation>; write(productId: string, id: string, price: string): Promise<{ requestId: string | null }>; locations(): Promise<unknown[]> };
 
 /** Only constructed in the guardrail process. Mutations have no automatic retry. */
 export function shopifyPricePort(shop: string, accessToken: string, options: ConnectorOptions = {}): ShopifyPricePort {
-  const http = createHttpClient({ ...options, timeoutMs: options.timeoutMs ?? 4000 });
+  const http = createHttpClient({ ...options, timeoutMs: options.timeoutMs ?? SHOPIFY_PRICE_HTTP_TIMEOUT_MS });
   const url = shopifyEndpoint(shop);
   const query = async (document: string, variables: Record<string, unknown>) => {
     const response = await http({ url, method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Shopify-Access-Token': accessToken }, body: JSON.stringify({ query: document, variables }) });

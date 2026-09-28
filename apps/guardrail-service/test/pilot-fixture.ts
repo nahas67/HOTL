@@ -1,8 +1,8 @@
-import { emptyPilotDraft, type PilotDraft } from '@hotl/schemas';
+import { emptyPilotDraft, PILOT_ECONOMICS_FORMULA_VERSION, type PilotDraft } from '@hotl/schemas';
 
 const owner = <T extends string | number>(value: T) => ({ value, provenance: 'OWNER_ENTERED' as const, evidenceRef: 'Owner pilot worksheet, signed review' });
 const contractual = <T extends string | number>(value: T) => ({ value, provenance: 'CONTRACTUAL' as const, evidenceRef: 'Supplier contract and rate card' });
-const calculated = (value: number) => ({ value, provenance: 'CALCULATED' as const, evidenceRef: 'Owner reviewed unit economics worksheet' });
+const calculated = (value: number) => ({ value, provenance: 'CALCULATED' as const, evidenceRef: PILOT_ECONOMICS_FORMULA_VERSION });
 
 /** Complete synthetic owner inputs for tests only. No business values are seeded in production. */
 export function completePilotDraft(): PilotDraft {
@@ -14,8 +14,8 @@ export function completePilotDraft(): PilotDraft {
   draft.economics = { supplierProductCost: contractual(30), inboundFreight: contractual(2), outboundShipping: contractual(4),
     packaging: contractual(1), storeFees: contractual(2), paymentFees: contractual(3), advertisingAcquisition: owner(5),
     refundAllowance: owner(2), returnAllowance: owner(2), fulfillmentExpense: contractual(3),
-    taxHandling: owner('Owner will review tax handling before any sale'), targetContribution: calculated(20),
-    breakEvenCac: calculated(30), breakEvenRoas: calculated(3.5) };
+    taxHandling: owner('Synthetic fixture tax treatment'), taxAndDutyPerOrder: owner(0), targetContribution: calculated(46),
+    breakEvenCac: calculated(51), breakEvenRoas: calculated(1.9608) };
   draft.capital = { maxPilotCapital: owner(10000), protectedReserve: owner(1000), maxDailySpend: owner(1000),
     maxWeeklySpend: owner(3000), maxMonthlySpend: owner(5000), maxAdvertisingExposure: owner(5000),
     maxSupplierExposure: owner(2000), maxInventoryExposure: owner(2000), maxExperimentLoss: owner(500),

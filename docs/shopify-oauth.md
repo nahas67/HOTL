@@ -1,6 +1,6 @@
 # Shopify installation and token lifecycle
 
-Implementation checkpoint: 2026-09-18. This is a standalone OAuth integration owned by the guardrail service. The tests use local fixtures and intercepted requests. No merchant installation, remote token rotation, deployed callback or actual Shopify price mutation has been verified by these tests.
+Implementation checkpoint: 2026-09-18; contract rechecked 2026-09-28. This is a standalone OAuth integration owned by the guardrail service. The tests use local fixtures and intercepted requests. No merchant installation, remote token rotation, deployed callback or actual Shopify price mutation has been verified by these tests.
 
 ## Configuration and ownership
 
@@ -35,6 +35,31 @@ Owner disconnect is revision-bound and clears local credentials while preserving
 
 Changing the encryption key without a controlled re-encryption migration makes previous credentials unreadable. Retain the original key backup or reauthorize affected installations. Changing the app client ID also requires reauthorization. There is no automated dual-secret rollout or key-envelope re-encryption tool in this module; plan and verify those deployment operations separately.
 
+## Shopify app client-secret rotation
+
+Shopify's current [credential-rotation procedure](https://shopify.dev/docs/apps/build/authentication-authorization/manage-credentials)
+says the old secret remains active until explicitly revoked, and webhook signatures
+use Shopify's oldest unrevoked secret. It also warns that stored access tokens are
+pinned to the secret that minted them and must be replaced/re-pinned before the old
+secret is revoked. Follow the current procedure for the app's token grant type; HOTL
+does not bulk-migrate access tokens or prove their re-pinning.
+
+For a routine overlap, the guardrail service uses `SHOPIFY_CLIENT_SECRET` for OAuth
+and accepts both it and `SHOPIFY_PREVIOUS_CLIENT_SECRET` for raw-body webhook HMAC.
+Configure a canonical UTC `SHOPIFY_PREVIOUS_CLIENT_SECRET_VALID_UNTIL` no more than
+30 days in the future. The fixed deadline ensures HOTL cannot keep accepting the old
+key forever even if the operator forgets to finish rotation. Once Shopify has
+separately confirmed old-secret revocation, set
+`SHOPIFY_PREVIOUS_CLIENT_SECRET_REVOKED_AT` to the verified canonical UTC time and
+shorten the acceptance deadline to no later than one hour afterward. Shopify's
+[webhook verification documentation](https://shopify.dev/docs/apps/build/webhooks/verify-deliveries)
+says HMAC generation may take up to an hour to use the new secret after rotation;
+that delay is not evidence that revocation happened. HOTL never performs or infers
+Shopify-side revocation. After the configured deadline, remove both previous-secret
+environment values and restart. Malformed, expired or contradictory transition
+settings prevent service startup. The existing constant-time HMAC compare and exact
+raw request body remain required throughout the transition.
+
 ## Provider boundary
 
 `shopify-provider.ts` targets `/admin/api/2026-07/graphql.json` and checks the returned `x-shopify-api-version`. It reads the exact shop domain, currency and `plan.partnerDevelopment` alongside the variant's price and product revision. Missing or mismatched evidence is rejected.
@@ -58,6 +83,7 @@ Before claiming staging verification: register a real development-store app and 
 
 - [Standalone authorization](https://shopify.dev/docs/apps/build/authentication-authorization/authenticate-standalone-apps): authorization-code flow, registered redirect URI, nonce and callback checks.
 - [Access token lifecycle](https://shopify.dev/docs/apps/build/authentication-authorization/access-tokens): expiring offline pairs, refresh responses, token retirement and HTTP 401 after revocation. Current documentation permits a limited overlap for previous refresh tokens; HOTL's ambiguous-refresh policy deliberately remains more conservative.
+- [Client-secret rotation](https://shopify.dev/docs/apps/build/authentication-authorization/manage-credentials): old secret remains active until operator revocation; stored access tokens must be migrated/re-pinned before revocation.
 - [Product variant bulk update](https://shopify.dev/docs/api/admin-graphql/2026-07/mutations/productVariantsBulkUpdate): single-product variant updates and the partial-update setting. Documentation URLs may redirect to the latest reference; the runtime request and response-version check remain pinned to 2026-07.
 
-References inspected on 2026-09-18. Documentation research is not evidence of an executed merchant integration.
+Credential and webhook rotation references rechecked on 2026-09-28; the pinned API version remains `2026-07`. Documentation research is not evidence of an executed merchant integration.

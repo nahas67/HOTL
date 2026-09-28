@@ -1,5 +1,8 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createHmac, randomUUID } from 'node:crypto';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { ConnectorError, type CommerceConnector } from '@hotl/connector-sdk';
 import { createEngine } from '../src/engine.js';
 import { ShopifyCommerceService } from '../src/shopify-service.js';
@@ -7,10 +10,13 @@ import type { ShopifyOAuthService } from '../src/shopify-oauth.js';
 import { shopifyData } from '../src/shopify-state.js';
 
 const actor = { type: 'owner' as const, id: 'owner-one' }, secret = 'fixture-shopify-webhook-secret';
-async function fixture() {
-  const engine = await createEngine(), id = randomUUID(), now = new Date('2026-09-17T12:00:00.000Z');
+const encryptedFixture = [Buffer.alloc(12, 1).toString('base64'), Buffer.alloc(16, 2).toString('base64'), Buffer.from('{}').toString('base64')].join('.');
+const directories: string[] = [];
+afterEach(async () => { await Promise.all(directories.splice(0).map(path => rm(path, { recursive: true, force: true }))); });
+async function fixture(filePath?: string) {
+  const engine = await createEngine(filePath ? { filePath, seed: false } : {}), id = randomUUID(), now = new Date('2026-09-17T12:00:00.000Z');
   await engine.extensionTransaction('integration.fixture', {}, actor, 'seed', state => {
-    state.extensions!.shopifyOAuth = { version: 1, workspaceId: 'workspace', pending: [], installations: [{ id, workspaceId: 'workspace', ownerId: actor.id, shop: 'fixture.myshopify.com', clientId: 'fixture', revision: 1, scopes: ['read_products', 'write_products'], status: 'INSTALLED', createdAt: now.toISOString(), installedAt: now.toISOString(), expiresAt: '2026-09-18T12:00:00.000Z', refreshExpiresAt: '2026-10-01T12:00:00.000Z', encryptedTokens: 'fixture' }] }; return {};
+    state.extensions!.shopifyOAuth = { version: 1, workspaceId: 'workspace', pending: [], installations: [{ id, workspaceId: 'workspace', ownerId: actor.id, shop: 'fixture.myshopify.com', clientId: 'fixture', revision: 1, scopes: ['read_products', 'write_products'], status: 'INSTALLED', createdAt: now.toISOString(), installedAt: now.toISOString(), expiresAt: '2026-09-18T12:00:00.000Z', refreshExpiresAt: '2026-10-01T12:00:00.000Z', encryptedTokens: encryptedFixture }] }; return {};
   });
   const connector = {
     listProducts: vi.fn(async () => ({ items: [{ provider: 'shopify', externalId: 'gid://shopify/Product/1', title: 'Provider item', handle: 'item', status: 'active', updatedAt: now.toISOString(), variants: 'separate' }], nextCursor: null })),
@@ -33,7 +39,7 @@ describe('Shopify durable inbox and reconciliation worker', () => {
     await expect(f.service.webhook(f.id, changed, changedSignature, 'delivery-1', 'products/update')).rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' });
     expect(await f.service.workOnce()).toMatchObject({ status: 'COMPLETED', variants: 1, orderScopeGranted: false });
     const state = await f.engine.snapshot(), data = shopifyData(state);
-    expect(data.inbox).toHaveLength(1); expect(data.variants[0]).toMatchObject({ price: '100.00', revision: 1 });
+    expect(data.inbox).toMatchObject([{ status: 'RECONCILED', syncJobId: data.jobs[0].id, queuedAt: expect.any(String), reconciledAt: expect.any(String) }]); expect(data.variants[0]).toMatchObject({ price: '100.00', revision: 1 });
     expect(data.snapshots[0].products[0]).toMatchObject({ title: 'Provider item' });
     expect(state.products).toEqual(before); expect(f.connector.listOrders).not.toHaveBeenCalled();
     expect(JSON.stringify(await f.service.overview(actor))).not.toContain('encryptedTokens');
@@ -43,6 +49,57 @@ describe('Shopify durable inbox and reconciliation worker', () => {
     await expect(f.service.webhook(f.id, f.body, 'invalid', 'delivery', 'products/update')).rejects.toMatchObject({ code: 'INVALID_WEBHOOK' });
     await expect(f.service.queueSync(f.id, { type: 'owner', id: 'other' }, 'other')).rejects.toMatchObject({ code: 'SHOPIFY_INSTALLATION_NOT_FOUND' });
     expect(shopifyData(await f.engine.snapshot()).inbox).toEqual([]); expect(f.connector.listProducts).not.toHaveBeenCalled();
+  });
+  it('records accepted webhook intake as pending until a worker actually reconciles it', async () => {
+    const f = await fixture();
+    const received = await f.service.webhook(f.id, f.body, f.signature, 'pending-delivery', 'products/update');
+    expect(received).toMatchObject({ accepted: true, duplicate: false });
+    expect(shopifyData(await f.engine.snapshot()).inbox).toMatchObject([{ status: 'PENDING', attempts: 0 }]);
+    expect(f.connector.listProducts).not.toHaveBeenCalled();
+  });
+  it('deduplicates a repeated delivery while the original event is actively reconciling', async () => {
+    const f = await fixture();
+    await f.service.webhook(f.id, f.body, f.signature, 'in-flight-delivery', 'products/update');
+    let announceStarted!: () => void, release!: () => void;
+    const started = new Promise<void>(resolve => { announceStarted = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const list = vi.mocked(f.connector.listProducts).getMockImplementation();
+    if (!list) throw new Error('Shopify product-list fixture is missing.');
+    vi.mocked(f.connector.listProducts).mockImplementation(async input => { announceStarted(); await gate; return list(input); });
+    const work = f.service.workOnce();
+    await started;
+    expect(shopifyData(await f.engine.snapshot()).inbox).toMatchObject([{ status: 'RECONCILING', attempts: 1 }]);
+    expect(await f.service.webhook(f.id, f.body, f.signature, 'same-body-new-delivery', 'products/update')).toMatchObject({ duplicate: true });
+    expect(shopifyData(await f.engine.snapshot()).inbox).toHaveLength(1);
+    release();
+    await expect(work).resolves.toMatchObject({ status: 'COMPLETED' });
+    expect(shopifyData(await f.engine.snapshot()).inbox).toMatchObject([{ status: 'RECONCILED' }]);
+  });
+  it('restarts between webhook receipt and sync without applying the webhook body', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'hotl-shopify-webhook-restart-')); directories.push(directory);
+    const filePath = join(directory, 'ledger.json'), f = await fixture(filePath);
+    await f.service.webhook(f.id, f.body, f.signature, 'restart-delivery', 'products/update');
+    const restarted = await createEngine({ filePath, seed: false });
+    const persisted = shopifyData(await restarted.snapshot()).inbox;
+    expect(persisted).toMatchObject([{ status: 'PENDING' }]);
+    expect(persisted[0]).not.toHaveProperty('syncJobId');
+    const resumed = new ShopifyCommerceService(restarted, f.oauth, { webhookSecret: secret, now: () => f.now,
+      connector: () => f.connector, port: () => ({ read: vi.fn(), write: vi.fn(), locations: async () => [{ id: 'location-1', name: 'Warehouse', isActive: true }] }) });
+    expect(await resumed.workOnce()).toMatchObject({ status: 'COMPLETED' });
+    expect(shopifyData(await restarted.snapshot()).inbox).toMatchObject([{ status: 'RECONCILED', syncJobId: expect.any(String) }]);
+  });
+  it('tracks retryable provider failures and dead-letters the webhook after the bounded retry budget', async () => {
+    const f = await fixture();
+    await f.service.webhook(f.id, f.body, f.signature, 'retry-delivery', 'products/update');
+    vi.mocked(f.connector.listProducts).mockRejectedValue(new ConnectorError('RATE_LIMITED'));
+    expect(await f.service.workOnce()).toMatchObject({ status: 'PENDING', reason: 'RATE_LIMITED' });
+    expect(shopifyData(await f.engine.snapshot()).inbox).toMatchObject([{ status: 'RETRY_PENDING', attempts: 1, errorCode: 'RATE_LIMITED' }]);
+    f.now.setTime(f.now.getTime() + 5001);
+    expect(await f.service.workOnce()).toMatchObject({ status: 'PENDING', reason: 'RATE_LIMITED' });
+    expect(shopifyData(await f.engine.snapshot()).inbox).toMatchObject([{ status: 'RETRY_PENDING', attempts: 2 }]);
+    f.now.setTime(f.now.getTime() + 10001);
+    expect(await f.service.workOnce()).toMatchObject({ status: 'FAILED', reason: 'RATE_LIMITED' });
+    expect(shopifyData(await f.engine.snapshot()).inbox).toMatchObject([{ status: 'DEAD_LETTER', attempts: 3, errorCode: 'RATE_LIMITED' }]);
   });
   it('retry backoff and exhausted attempts preserve the last canonical snapshot', async () => {
     const f = await fixture(); await f.service.queueSync(f.id, actor, 'first'); await f.service.workOnce();
@@ -68,7 +125,7 @@ describe('Shopify durable inbox and reconciliation worker', () => {
   });
   it('a crash lease can resume reads and duplicate worker passes do not repeat a completed job', async () => {
     const f = await fixture(); const queued = await f.service.queueSync(f.id, actor, 'sync');
-    await f.engine.extensionTransaction('integration.fixture.crash', {}, actor, 'crash', state => { const job = shopifyData(state).jobs[0]; job.status = 'RUNNING'; job.claim = 'lost-worker'; job.leaseUntil = '2026-09-17T11:59:00.000Z'; job.attempts = 1; return {}; });
+    await f.engine.extensionTransaction('integration.fixture.crash', {}, actor, 'crash', state => { const job = shopifyData(state).jobs[0]; job.status = 'RUNNING'; job.claim = randomUUID(); job.leaseUntil = '2026-09-17T11:59:00.000Z'; job.attempts = 1; return {}; });
     expect(await f.service.workOnce()).toMatchObject({ jobId: queued.jobId, status: 'COMPLETED' });
     expect(await f.service.workOnce()).toEqual({ idle: true }); expect(f.connector.listProducts).toHaveBeenCalledTimes(1);
   });

@@ -8,6 +8,9 @@ import { registerShopifyRoutes } from './shopify-routes.js';
 
 export type ServerOptions = Omit<IdentityOptions,'mode'> & {engine?:GuardrailEngine;mode?:'simulation'|'live';logger?:boolean};
 const readHeader=(request:FastifyRequest,name:string)=>{const value=request.headers[name];return typeof value==='string'?value:'';};
+const present=(value:unknown)=>typeof value==='string'&&value.trim().length>0;
+const KILL_SWITCH_READ_TIMEOUT_MS=2500;
+const GUARDRAIL_TRANSACTION_TIMEOUT_MS=30000;
 
 export async function createServer(options:ServerOptions={}) {
   const parsedMode=hotlModeSchema.safeParse(options.mode??process.env.HOTL_MODE??'simulation');
@@ -17,10 +20,10 @@ export async function createServer(options:ServerOptions={}) {
   const identity=createIdentity({...options,mode});
   const databaseUrl=options.engine?undefined:process.env.GUARDRAIL_DATABASE_URL;
   if(databaseUrl&&identity.workspaceId!==process.env.GUARDRAIL_WORKSPACE_ID)throw new GuardrailError('WORKSPACE_MISMATCH','Authentication and ledger workspace bindings must match.',503);
-  const store=databaseUrl?new PostgresRuntimeStateStore({connectionString:databaseUrl,workspaceId:process.env.GUARDRAIL_WORKSPACE_ID??'',statementTimeoutMillis:30000}):undefined;
+  const store=databaseUrl?new PostgresRuntimeStateStore({connectionString:databaseUrl,workspaceId:process.env.GUARDRAIL_WORKSPACE_ID??'',statementTimeoutMillis:GUARDRAIL_TRANSACTION_TIMEOUT_MS}):undefined;
   let engine:GuardrailEngine;
   try {engine=options.engine??await createEngine({...(store?{store,initializeEmptyStore:process.env.GUARDRAIL_INITIALIZE_EMPTY_DATABASE==='true'}:{filePath:process.env.GUARDRAIL_STATE_PATH??'.data/guardrails.json',initializeEmptyFile:process.env.GUARDRAIL_INITIALIZE_EMPTY_FILE==='true'}),mode,seed:mode==='simulation',shopifyStagingShops:(process.env.SHOPIFY_STAGING_SHOPS??'').split(',').map(shop=>shop.trim()).filter(Boolean),killSwitchReader:async()=>{
-    const response=await fetch(`${process.env.KILL_SWITCH_URL??'http://127.0.0.1:4200'}/state`,{headers:{Authorization:`Bearer ${process.env.KILL_SWITCH_READ_TOKEN??'hotl-demo-kill-read-token'}`},signal:AbortSignal.timeout(2500)});
+    const response=await fetch(`${process.env.KILL_SWITCH_URL??'http://127.0.0.1:4200'}/state`,{headers:{Authorization:`Bearer ${process.env.KILL_SWITCH_READ_TOKEN??'hotl-demo-kill-read-token'}`},signal:AbortSignal.timeout(KILL_SWITCH_READ_TIMEOUT_MS)});
     if(!response.ok)throw new Error('Emergency stop unavailable');return response.json() as Promise<{engaged:boolean}>;
   }});} catch(error) {await store?.close();throw error;}
   const app=Fastify({logger:options.logger?{serializers:{req:request=>({method:request.method,url:request.url?.split('?')[0]})},redact:['req.headers.authorization','req.headers.cookie','req.headers["x-hotl-internal-token"]','req.headers["x-shopify-hmac-sha256"]','res.headers["set-cookie"]']}:false,bodyLimit:128*1024});
@@ -48,6 +51,18 @@ export async function createServer(options:ServerOptions={}) {
   });
   const requestLog=(_error:unknown)=>app.log.error({code:'INTERNAL_ERROR'},'Guardrail operation failed; inspect durable operation state.');
   app.get('/health',async()=>({status:'ok',service:'guardrail-service',mode}));
+  app.get('/health/ready',async(_request,reply)=>{
+    try {
+      if(mode!=='live'||!databaseUrl||!present(process.env.KILL_SWITCH_URL)||!present(process.env.KILL_SWITCH_READ_TOKEN))
+        return reply.status(503).send({status:'not_ready',service:'guardrail-service'});
+      await engine.snapshot();
+      const kill=await engine.killState();
+      return {status:'ready',service:'guardrail-service',mode,persistence:'available',workspaceBinding:'verified',
+        runtimeRole:'non-superuser-no-bypassrls',killReader:'reachable',killEngaged:kill.engaged};
+    } catch {
+      return reply.status(503).send({status:'not_ready',service:'guardrail-service'});
+    }
+  });
   app.get('/api/identity',async request=>({actor:await requireAccess(request,'owner',true),mode}));
   app.get('/api/catalog',async()=>({products:(await engine.snapshot()).products.filter(item=>item.status==='active').map(({landedCost:_landedCost,estimatedCac:_estimatedCac,...product})=>product),mode}));
   const base='/api/guardrails/v1';
@@ -93,6 +108,6 @@ export async function createServer(options:ServerOptions={}) {
   mutation('/commerce/events','commerce',(request,actor)=>engine.commerceEvent(request.body,actor,key(request)));
   mutation('/runs/event','runs',(request,actor)=>engine.recordRunEvent(request.body,actor,key(request)));
   registerOperatingRoutes(app,engine,{owner:request=>requireAccess(request,'owner',true),key});
-  registerShopifyRoutes(app,engine,{owner:request=>requireAccess(request,'owner',true),key,workspaceId:identity.workspaceId});
+  registerShopifyRoutes(app,engine,{owner:request=>requireAccess(request,'owner',true),key,workspaceId:identity.workspaceId,mode});
   return app;
 }

@@ -1,20 +1,26 @@
 # Shopify guarded development-store loop
 
-Checkpoint: 2026-09-23. **Implemented; external verification pending.** The default
+Checkpoint: 2026-09-28. **Locally implemented; external verification pending.** The default
 launcher remains a local simulation. This integration adds an owner-operated,
 explicitly allowlisted development-store price workflow inside guardrails. It does
 not enable autonomous price changes or writes to ordinary merchant stores.
 
-The [September 24 official Shopify contract review](shopify-official-contract-review.md)
-confirms the pinned mutation shape and records staging prerequisites and remaining
-rotation/monitoring gaps. Webhook signing can use the previous app secret for up to
-an hour after rotation. An isolated guardrail process may set
-`SHOPIFY_PREVIOUS_CLIENT_SECRET` together with an explicit UTC
-`SHOPIFY_PREVIOUS_CLIENT_SECRET_VALID_UNTIL` no more than one hour ahead; the
-service rejects incomplete, expired or indefinite rotation configuration and
-stops accepting the previous secret at expiry. Remove both settings afterward.
-The app's webhook payload API version is configured separately from the Admin
-GraphQL version and must be recorded in real Gate C evidence.
+The [2026-09-28 official Shopify contract review](shopify-official-contract-review.md)
+rechecked API `2026-07`, mutation permissions, tokens, scopes, development-store
+identification, rate limits, webhook HMAC and credential rotation. Shopify keeps
+the old secret active until an operator revokes it; Shopify signs with its oldest
+unrevoked secret. During that overlap HOTL accepts current and previous secrets
+only through the explicitly configured finite
+`SHOPIFY_PREVIOUS_CLIENT_SECRET_VALID_UNTIL` (maximum 30 days). After the operator
+separately verifies Shopify-side revocation, set
+`SHOPIFY_PREVIOUS_CLIENT_SECRET_REVOKED_AT` to its canonical UTC time and shorten
+the acceptance deadline to at most one hour afterward. Shopify's webhook docs
+describe up to one hour for signatures to begin using the new secret; this does
+not prove that Shopify revoked the old secret. Remove both previous-secret
+settings explicitly after the deadline. Restart fails closed on malformed,
+expired or inconsistent transition configuration. The app's webhook payload API
+version is configured separately from Admin GraphQL and must be recorded in real
+Gate C evidence.
 
 ## Implemented sequence
 
@@ -37,6 +43,13 @@ GraphQL version and must be recorded in real Gate C evidence.
    while unresolved. Another shop-scoped endpoint for the same topic blocks
    registration for owner review. An observed subscription proves presence, not
    who created it.
+   Inbox status is evidence-accurate: `PENDING` means received,
+   `RECONCILIATION_QUEUED` means linked to a durable job, `RECONCILING` means a
+   worker claimed it, `RETRY_PENDING` carries its next attempt, `RECONCILED` is
+   written only with committed authoritative sync, and `FAILED`/`DEAD_LETTER`
+   retain the failure. Legacy `COMPLETED` inbox entries are explicitly requeued
+   because that old label represented queueing only. Webhook bodies never write
+   canonical product, variant or inventory state.
 4. The owner records dated cost/category/origin evidence and proposes one variant
    price with current resource and Constitution revisions. The proposal is durable;
    it does not perform a provider write. Before dispatch, the owner may cancel the
@@ -76,14 +89,37 @@ and an `Idempotency-Key`. The cockpit proxies only its explicit allowlist.
 | `POST /prices/:id/reconcile` | Read provider state; never resend the mutation. |
 | `POST /prices/:id/investigations` | Append an owner investigation to an unresolved operation; binds to current status and reconciliation time, and never clears the lock. |
 | `POST /worker` | Run a bounded read-worker pass for this owner. |
+| `GET /api/shopify/webhooks/health` | Public non-secret readiness: reports ingress, worker and reconciliation mode separately; simulation reports not ready. |
 | `GET /api/shopify/oauth/callback` | Public signed callback plus browser cookie; outside mutation base. |
 | `POST /api/shopify/webhooks/:id` | Public raw-body HMAC intake, maximum 2 MiB; outside mutation base. |
 
-The five-second background worker is opt-in through `SHOPIFY_WORKER_ENABLED=true`.
-It uses durable job leases, a bounded request/page budget, limited read retries and
-installation revisions. Failed or superseded imports preserve the previous snapshot.
-An authoritative authentication failure invalidates only the credential revision
-that failed. An unsigned uninstall hint cannot itself disconnect an installation.
+Set `SHOPIFY_RECONCILIATION_MODE` explicitly to `DURABLE_BACKGROUND`, `OWNER_MANUAL`
+or `DISABLED`. The five-second worker runs only in `DURABLE_BACKGROUND`;
+`OWNER_MANUAL` allows an authenticated owner to invoke `/worker` deliberately but
+does not count as a ready background worker. `DISABLED` blocks both. The legacy
+`SHOPIFY_WORKER_ENABLED=true` alias starts the durable worker but should be replaced
+with the explicit mode. Jobs use durable leases, a bounded request/page budget,
+limited read retries and installation revisions. Failed or superseded imports
+preserve the previous snapshot. An authoritative authentication failure invalidates
+only the credential revision that failed. An unsigned uninstall hint cannot itself
+disconnect an installation.
+
+### Provider transaction duration and constraint
+
+The owner price dispatch intentionally holds the serialized ledger transaction
+across provider preflight/read/write/read-back. Shopify GraphQL HTTP requests each
+have a 4-second timeout and are not automatically retried. The path makes three
+independent emergency-reader checks at 2.5 seconds each and at most four provider
+requests (three reads and one write): a 23.5-second external-wait budget before
+database and application overhead. The HTTP server configures PostgreSQL statement
+and idle-transaction timeouts to 30 seconds, leaving about 6.5 seconds for that
+overhead; the workspace pool defaults to four connections and lock acquisition to
+five seconds. Timing tests verify call order/count with injected latency, while
+provider tests verify timeout and no mutation retry. This is a narrow single-store
+drill constraint, not a high-throughput design. A timeout or lost commit after a
+provider write remains uncertain and is never blindly resent. Before scaling,
+design a durable pre-dispatch/outbox progression and prove that it preserves the
+same no-resend, uncertainty and reconciliation guarantees.
 
 ## Outcome and recovery contract
 
@@ -143,6 +179,9 @@ File/checkpoint/kill-journal restoration is documented in
    the staging guardrail process. `pnpm dev` intentionally never forwards this
    variable and accepts simulation mode only. A hostname entry is insufficient:
    provider preflight must also report a partner development store.
+   Set `SHOPIFY_RECONCILIATION_MODE` to the mechanism planned for the drill. The
+   preflight reports `INGRESS_READY`, `WORKER_READY` and `RECONCILIATION_READY`
+   separately; a deliberate manual owner drill is labeled `MANUAL_ONLY`.
 4. Exercise the actual browser install and cookie round trip. Queue and run sync.
    Set `SHOPIFY_WEBHOOK_ORIGIN` to the public HTTPS **guardrail** origin, without a
    path, query or fragment. In the owner cockpit, ensure each supported topic for
@@ -161,9 +200,16 @@ File/checkpoint/kill-journal restoration is documented in
    execution, lost response and restart in the controlled environment. Test
    compensation only with a fresh proposal and unchanged provider state. Execute
    token expiry/reauthorization and separately deployed emergency revocation drills.
-7. Record each environment, date, code snapshot identifier, result and artifact in
+7. Run `node scripts/staging-readiness.mjs --json` for static configuration and
+   its exact machine-readable missing list. After trusted HTTPS targets exist, run
+   `node scripts/staging-readiness.mjs --active --json` to explicitly request
+   read-only GET probes for callback reachability, guardrail readiness, Shopify
+   ingress readiness and kill-state readability. These probes never mutate
+   Shopify; they do not verify live Shopify connectivity, DB DDL denial, logical
+   deployment independence, backup restoration or real webhook delivery. Record
+   each environment, date, code snapshot identifier, result and artifact in
    [continuation verification](continuation-verification.md). Leave capabilities
-   unverified until these interactions actually run.
+   unverified until the provider interactions actually run.
 
 ## Explicit limits
 

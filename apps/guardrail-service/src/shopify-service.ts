@@ -6,9 +6,9 @@ import { GuardrailError, type GuardrailEngine, type Result } from './engine.js';
 import { assertShopifyInstallation, lookupShopifyInstallation, type ShopifyOAuthService } from './shopify-oauth.js';
 import { shopifyPricePort, type ShopifyPricePort } from './shopify-provider.js';
 import { managedWebhookTopic, shopifyWebhookPort, type ManagedWebhookTopic, type ShopifyWebhookPort } from './shopify-webhooks.js';
-import { shopifyData, ownVariant, sameObservation, variantId, type MerchantVariant, type PriceOperation } from './shopify-state.js';
+import { shopifyData, ownVariant, sameObservation, variantId, webhookTopicSchema, shopifySnapshotSchema, type MerchantVariant, type PriceOperation } from './shopify-state.js';
 
-type Options = { webhookSecret: string; previousWebhookSecret?: string; previousWebhookSecretValidUntil?: string; webhookOrigin?: string; webhookPort?: (shop: string, token: string) => ShopifyWebhookPort;
+type Options = { webhookSecret: string; previousWebhookSecret?: string; previousWebhookSecretRevokedAt?: string; previousWebhookSecretValidUntil?: string; webhookOrigin?: string; webhookPort?: (shop: string, token: string) => ShopifyWebhookPort;
   connector?: (shop: string, token: string) => CommerceConnector; port?: (shop: string, token: string) => ShopifyPricePort; now?: () => Date };
 const economicsSchema = z.object({ installationId: z.string().uuid(), variantId, expectedRevision: z.number().int().positive(),
   landedCost: z.number().min(0).max(1_000_000).multipleOf(0.01), estimatedCac: z.number().min(0).max(1_000_000).multipleOf(0.01),
@@ -23,11 +23,17 @@ export class ShopifyCommerceService {
   private active = false;
   constructor(private engine: GuardrailEngine, readonly oauth: ShopifyOAuthService, private options: Options) {
     const previous = options.previousWebhookSecret;
+    const revokedAt = options.previousWebhookSecretRevokedAt;
     const until = options.previousWebhookSecretValidUntil;
-    if (previous !== undefined || until !== undefined) {
+    if (previous !== undefined || revokedAt !== undefined || until !== undefined) {
+      const revoked = revokedAt ? Date.parse(revokedAt) : NaN;
       const expires = until ? Date.parse(until) : NaN;
-      if (!previous || previous === options.webhookSecret || !Number.isFinite(expires) || expires <= this.now().getTime() || expires > this.now().getTime() + 60 * 60 * 1000)
-        throw new GuardrailError('SHOPIFY_WEBHOOK_ROTATION_INVALID', 'The previous webhook secret requires a distinct secret and an expiry within one hour.', 503);
+      const invalidRevocation = revokedAt !== undefined && (!Number.isFinite(revoked) || new Date(revoked).toISOString() !== revokedAt
+        || revoked > this.now().getTime() || expires <= revoked || expires > revoked + 60 * 60 * 1000);
+      const invalidOverlap = revokedAt === undefined && expires > this.now().getTime() + 30 * 24 * 60 * 60 * 1000;
+      if (!previous || previous === options.webhookSecret || !Number.isFinite(expires) || new Date(expires).toISOString() !== until
+        || expires <= this.now().getTime() || invalidRevocation || invalidOverlap)
+        throw new GuardrailError('SHOPIFY_WEBHOOK_ROTATION_INVALID', 'A distinct previous secret and finite UTC acceptance deadline are required; overlap is capped at 30 days, and a verified Shopify revocation allows at most one additional hour.', 503);
     }
   }
   private now() { return this.options.now?.() ?? new Date(); }
@@ -120,7 +126,7 @@ export class ShopifyCommerceService {
       ? verifyWebhookSignature({ provider: 'shopify', rawBody, signature, secret: this.options.previousWebhookSecret }) : false;
     if (!current && !previous) throw new GuardrailError('INVALID_WEBHOOK', 'Webhook signature is invalid.', 401);
     z.string().min(1).max(128).regex(/^[a-zA-Z0-9_-]+$/).parse(deliveryId);
-    z.enum(['products/create', 'products/update', 'products/delete', 'inventory_levels/update', 'orders/create', 'orders/updated', 'app/uninstalled']).parse(topic);
+    const parsedTopic = webhookTopicSchema.parse(topic);
     let parsed: unknown; try { parsed = JSON.parse(rawBody.toString('utf8')); } catch { throw new GuardrailError('INVALID_WEBHOOK', 'Webhook body is invalid.'); }
     const payload = z.object({ id: z.union([z.number().int().nonnegative(), z.string().regex(/^\d+$/)]).optional(), inventory_item_id: z.union([z.number().int().positive(), z.string().regex(/^\d+$/)]).optional() }).passthrough().parse(parsed);
     if (payload.id === undefined && payload.inventory_item_id === undefined) throw new GuardrailError('INVALID_WEBHOOK', 'A resource identifier is required.');
@@ -128,13 +134,13 @@ export class ShopifyCommerceService {
     if (!installation) throw new GuardrailError('SHOPIFY_INSTALLATION_NOT_FOUND', 'Installation not found.', 404);
     const actor: Actor = { type: 'owner', id: installation.ownerId };
     const digest = createHash('sha256').update(rawBody).digest('hex');
-    return this.engine.extensionTransaction('integration.shopify.webhook.received', { installationId, digest, deliveryId, topic }, actor, `shopify-hook:${installationId}:${deliveryId}`, state => {
+    return this.engine.extensionTransaction('integration.shopify.webhook.received', { installationId, digest, deliveryId, topic: parsedTopic }, actor, `shopify-hook:${installationId}:${deliveryId}`, state => {
       assertShopifyInstallation(state, installationId, actor);
       const data = shopifyData(state);
       const duplicate = data.inbox.find(event => event.installationId === installationId && event.digest === digest);
       if (duplicate) return { accepted: true, duplicate: true, eventId: duplicate.id };
-      if (data.inbox.filter(e => e.status === 'PENDING').length >= 1000) throw new GuardrailError('WEBHOOK_BACKLOG_FULL', 'Webhook intake is temporarily full; retry delivery.', 503);
-      const id = randomUUID(); data.inbox.push({ id, installationId, ownerId: actor.id, digest, deliveryId, topic, receivedAt: this.now().toISOString(), status: 'PENDING', attempts: 0 });
+      if (data.inbox.filter(e => ['PENDING', 'RECONCILIATION_QUEUED', 'RECONCILING', 'RETRY_PENDING'].includes(e.status)).length >= 1000) throw new GuardrailError('WEBHOOK_BACKLOG_FULL', 'Webhook backlog is temporarily full; retry delivery.', 503);
+      const id = randomUUID(); data.inbox.push({ id, installationId, ownerId: actor.id, digest, deliveryId, topic: parsedTopic, receivedAt: this.now().toISOString(), status: 'PENDING', attempts: 0 });
       // Unsigned shop/topic/time headers and body content never modify canonical records.
       return { accepted: true, duplicate: false, eventId: id };
     });
@@ -203,19 +209,26 @@ export class ShopifyCommerceService {
     if (this.active) return { busy: true }; this.active = true;
     try {
       const state = shopifyData(await this.engine.snapshot());
-      const event = state.inbox.find(item => item.status === 'PENDING' && (!requester || item.ownerId === requester.id));
+      const event = state.inbox.find(item => ['PENDING', 'RETRY_PENDING'].includes(item.status)
+        && (!item.nextAttemptAt || Date.parse(item.nextAttemptAt) <= this.now().getTime()) && (!requester || item.ownerId === requester.id));
       if (event) {
         const actor: Actor = { type: 'owner', id: event.ownerId };
         try {
-          await this.queueSync(event.installationId, actor, `shopify-event-sync:${event.id}`);
-          await this.engine.extensionTransaction('integration.shopify.webhook.queued', { id: event.id }, actor, `shopify-event-queued:${event.id}`, draft => {
-            const current = shopifyData(draft).inbox.find(item => item.id === event.id)!; current.status = 'COMPLETED'; current.attempts++;
-            return { status: 'COMPLETED', meaning: 'Reconciliation queued; webhook body was not applied.' };
+          const queued = await this.queueSync(event.installationId, actor, `shopify-event-sync:${event.id}:${event.attempts}`);
+          const jobId = String(queued.jobId ?? '');
+          if (!z.string().uuid().safeParse(jobId).success) throw new GuardrailError('SYNC_QUEUE_FAILED', 'A durable reconciliation job was not created.', 503);
+          await this.engine.extensionTransaction('integration.shopify.webhook.queued', { id: event.id, jobId }, actor, `shopify-event-queued:${event.id}:${event.attempts}`, draft => {
+            const current = shopifyData(draft).inbox.find(item => item.id === event.id)!;
+            current.status = 'RECONCILIATION_QUEUED'; current.syncJobId = jobId; current.queuedAt = this.now().toISOString();
+            delete current.nextAttemptAt; delete current.errorCode;
+            return { status: current.status, jobId, meaning: 'Authoritative provider reconciliation is queued; the webhook body was not applied.' };
           });
         } catch (error) {
-          await this.engine.extensionTransaction('integration.shopify.webhook.failed', { id: event.id, attempt: event.attempts }, actor, `shopify-event-failed:${event.id}:${event.attempts}`, draft => {
-            const current = shopifyData(draft).inbox.find(item => item.id === event.id)!; current.attempts++; current.errorCode = code(error); if (current.attempts >= 3) current.status = 'DEAD_LETTER';
-            return { status: current.status };
+          await this.engine.extensionTransaction('integration.shopify.webhook.queue-failed', { id: event.id, attempt: event.attempts }, actor, `shopify-event-queue-failed:${event.id}:${event.attempts}`, draft => {
+            const current = shopifyData(draft).inbox.find(item => item.id === event.id)!; current.attempts++; current.errorCode = code(error);
+            if (current.attempts >= 3) current.status = 'DEAD_LETTER';
+            else { current.status = 'PENDING'; current.nextAttemptAt = new Date(this.now().getTime() + 5000 * 2 ** (current.attempts - 1)).toISOString(); }
+            return { status: current.status, errorCode: current.errorCode };
           });
         }
       }
@@ -228,12 +241,16 @@ export class ShopifyCommerceService {
   private async runSync(id: string, actor: Actor): Promise<Result> {
     const claim = randomUUID();
     const claimed = await this.engine.extensionTransaction('integration.shopify.sync.claimed', { id, claim }, actor, `shopify-sync-claim:${claim}`, state => {
-      const job = shopifyData(state).jobs.find(item => item.id === id && item.ownerId === actor.id)!;
+      const data = shopifyData(state), job = data.jobs.find(item => item.id === id && item.ownerId === actor.id)!;
       if (job.status !== 'PENDING' && !(job.status === 'RUNNING' && Date.parse(job.leaseUntil ?? '') <= this.now().getTime())) return { claimed: false };
       if (job.nextAttemptAt && Date.parse(job.nextAttemptAt) > this.now().getTime()) return { claimed: false };
       if (shopifyData(state).jobs.some(other => other.id !== id && other.installationId === job.installationId && other.status === 'RUNNING' && Date.parse(other.leaseUntil ?? '') > this.now().getTime())) return { claimed: false };
       if (job.attempts >= 3) { job.status = 'FAILED'; job.errorCode = 'SYNC_ATTEMPTS_EXHAUSTED'; return { claimed: false, status: 'FAILED' }; }
       job.status = 'RUNNING'; job.attempts++; job.claim = claim; job.leaseUntil = new Date(this.now().getTime() + 1800000).toISOString();
+      for (const event of data.inbox.filter(item => item.syncJobId === job.id && ['RECONCILIATION_QUEUED', 'RETRY_PENDING'].includes(item.status))) {
+        event.status = 'RECONCILING'; event.reconciliationStartedAt = this.now().toISOString(); event.attempts++;
+        delete event.nextAttemptAt; delete event.errorCode;
+      }
       return { claimed: true, installationId: job.installationId };
     });
     if (!claimed.claimed) return claimed;
@@ -267,8 +284,15 @@ export class ShopifyCommerceService {
           if (prior) { variant.economics = prior.economics; variant.revision = prior.revision + (sameObservation(prior, variant) ? 0 : 1); }
         }
         data.variants = [...data.variants.filter(item => item.installationId !== installationId), ...variants];
-        data.snapshots = [...data.snapshots.filter(item => item.installationId !== installationId), { installationId, ownerId: actor.id, observedAt: this.now().toISOString(), products, inventory, orders, locations }];
+        const snapshot = shopifySnapshotSchema.parse({ installationId, ownerId: actor.id, observedAt: this.now().toISOString(),
+          products: products.map(item => ({ ...item, provider: 'shopify' as const })),
+          inventory: inventory.map(item => ({ ...item, provider: 'shopify' as const })),
+          orders: orders.map(item => ({ ...item, provider: 'shopify' as const })), locations });
+        data.snapshots = [...data.snapshots.filter(item => item.installationId !== installationId), snapshot];
         job.status = 'COMPLETED'; job.completedAt = this.now().toISOString(); delete job.claim; delete job.errorCode; delete job.nextAttemptAt;
+        for (const event of data.inbox.filter(item => item.syncJobId === id && item.status === 'RECONCILING')) {
+          event.status = 'RECONCILED'; event.reconciledAt = job.completedAt;
+        }
         return { decision: 'allow', jobId: id, status: job.status, variants: variants.length, ordersImported: orders.length, orderScopeGranted: credentials.scopes.some(scope => ['read_orders', 'write_orders'].includes(scope)) };
       });
     } catch (error) {
@@ -282,6 +306,11 @@ export class ShopifyCommerceService {
         if (job.status === 'PENDING') job.nextAttemptAt = new Date(this.now().getTime() + 5000 * 2 ** (job.attempts - 1)).toISOString();
         else job.completedAt = this.now().toISOString();
         delete job.claim;
+        for (const event of shopifyData(state).inbox.filter(item => item.syncJobId === id && item.status === 'RECONCILING')) {
+          event.errorCode = job.errorCode;
+          if (job.status === 'PENDING' && job.nextAttemptAt) { event.status = 'RETRY_PENDING'; event.nextAttemptAt = job.nextAttemptAt; }
+          else event.status = retryable ? 'DEAD_LETTER' : 'FAILED';
+        }
         return { decision: 'deny', jobId: id, status: job.status, reason: job.errorCode };
       });
     }

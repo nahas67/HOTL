@@ -10,6 +10,7 @@ import type { ShopifyOAuthService } from '../src/shopify-oauth.js';
 import type { ShopifyWebhookPort, ProviderSubscription } from '../src/shopify-webhooks.js';
 
 const actor = { type: 'owner' as const, id: 'webhook-owner' }, topic = 'products/update' as const;
+const encryptedFixture = [Buffer.alloc(12, 1).toString('base64'), Buffer.alloc(16, 2).toString('base64'), Buffer.from('{}').toString('base64')].join('.');
 const dirs: string[] = [];
 afterEach(async () => { await Promise.all(dirs.splice(0).map(path => rm(path, { recursive: true, force: true }))); });
 
@@ -23,7 +24,7 @@ async function fixture() {
   await engine.extensionTransaction('integration.fixture', {}, actor, 'seed', state => {
     state.extensions!.shopifyOAuth = { version: 1, workspaceId: 'workspace', pending: [], installations: [{ id, workspaceId: 'workspace', ownerId: actor.id,
       shop, clientId: 'fixture', revision: 1, scopes: ['read_products'], status: 'INSTALLED', createdAt: now.toISOString(), installedAt: now.toISOString(),
-      expiresAt: '2026-09-24T12:00:00.000Z', refreshExpiresAt: '2026-10-01T12:00:00.000Z', encryptedTokens: 'fixture' }] };
+      expiresAt: '2026-09-24T12:00:00.000Z', refreshExpiresAt: '2026-10-01T12:00:00.000Z', encryptedTokens: encryptedFixture }] };
     return { seeded: true };
   });
   const remote: ProviderSubscription[] = [];

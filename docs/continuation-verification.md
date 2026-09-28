@@ -85,3 +85,30 @@ authorized real development store, registered app, trusted HTTPS callback and
 provisioned staging identity/storage/emergency plane. Retain request IDs and audit
 links, verify denial and recovery against that environment, then assess capability
 promotion. Normal-store writes and autonomous execution remain disabled.
+
+## 2026-09-28 Gate C local preflight hardening
+
+This dated entry supplements, and does not replace, the September 23 and 24 evidence above. Starting source commit: `088f641` on branch `codex/gate-c-preflight-hardening`; initial working tree was clean. The code/evidence change commit is recorded in the [dated evidence package](../evidence/gate-c-preflight-hardening-2026-09-28/README.md). No remote is configured. Runtime simulation data, workflow checkpoints, and the independent kill journal were not included in the source diff or modified by the drills.
+
+| Check | Result | Scope and limit |
+| --- | --- | --- |
+| `pnpm lint` | **PASSED** | ESLint over the repository. |
+| `pnpm typecheck` | **PASSED**: 11 workspace tasks | Five task results came from Turbo cache; all changed TypeScript packages executed. |
+| `pnpm test` | **PASSED**: 423 package tests plus 11 launcher/preflight tests; 25 regular PostgreSQL integration cases skipped | Guardrail 278, cockpit 31, connector SDK 49, commerce core 17, orchestrator 36, kill switch 12. Connector, commerce and kill-switch results were reused from Turbo cache. The 25 DB cases were run separately against native PostgreSQL. |
+| Targeted Shopify/economics suite | **PASSED**: 134 tests in 11 files | Includes provider, price, strict state corruption, OAuth, webhook lifecycle/restart, rotation, routes, tenant isolation and pilot-envelope/economics tests. |
+| Staging preflight tests | **PASSED**: 9 direct tests; included in the root test run | Exercises static/active separation, redaction, worker modes and rotation configuration. |
+| `pnpm build` | **PASSED**: 8 workspace tasks | Six task results were cached; cockpit and orchestrator executed. |
+| `pnpm test:e2e` | **PASSED**: 11 browser tests | Isolated local simulation only. |
+| `infra/scripts/test-database.ps1` | **PASSED** | Disposable native PostgreSQL 18.3; migrations, RLS/workspace ownership, unauthorized writes, audit append-only rules, kill latch and concurrent spend reservation. |
+| `infra/scripts/test-runtime-ledger.ps1` | **PASSED**: 32 DB tests | Disposable native PostgreSQL 18.3; real restart preserved the state/audit digest; custom-format dump restored to a second database with matching digest and restored RLS/grant/login-binding/append-only checks. |
+| Docker PostgreSQL restore runner | **UNRUN — DOCKER DAEMON UNAVAILABLE** | `docker info` could not contact the Docker Desktop engine; WSL also has no installed distribution. The native Windows drills above are separate evidence, not a Docker pass. |
+| `node scripts/staging-readiness.mjs --json` | **BLOCKED as expected** | Static-only status `BLOCKED`; worker and reconciliation `BLOCKED`; active probes `NOT_RUN`; `externalStagingVerified: false`. It reports 19 missing staging configuration fields. No credential values are emitted. |
+| `node scripts/staging-readiness.mjs --active --json` | **NOT RUN** | No staging endpoints are configured; active requests would not provide useful external evidence. |
+| `detect-secrets scan -n <changed files>` | **REVIEWED — no live credentials found** | All flagged strings were commented local examples or synthetic test values; no secret material was copied into the evidence package. |
+| `git diff --check` | **PASSED** | Only expected CRLF conversion warnings were emitted; regular and CR-normalized diff summaries match, so no repository-wide line-ending policy was introduced. |
+
+The 19 static-preflight fields still missing are `HOTL_MODE`, `GUARDRAIL_WORKSPACE_ID`, `GUARDRAIL_DATABASE_URL`, `SUPABASE_URL`, `OWNER_USER_IDS`, `GUARDRAIL_AUTHORIZATION_VERSION`, `AGENT_JWT_KEYS`, `HOTL_PUBLIC_ORIGIN`, `SHOPIFY_REDIRECT_URI`, `SHOPIFY_WEBHOOK_ORIGIN`, `SHOPIFY_CLIENT_ID`, `SHOPIFY_CLIENT_SECRET`, `SHOPIFY_STAGING_SHOPS`, `SHOPIFY_SCOPES`, `CONNECTOR_ENCRYPTION_KEY`, `KILL_SWITCH_URL`, `KILL_SWITCH_READ_TOKEN`, `HOTL_BACKUP_RESTORE_TARGET`, and `SHOPIFY_RECONCILIATION_MODE`. Active-only probe URLs are separately listed by the script and were not attempted.
+
+Gate A is **PARTIALLY VERIFIED / OWNER INPUT REQUIRED**: no legal seller country, verified landed costs/tax treatment, capital/reserve, exposure caps, refund limit or stop thresholds were invented or approved. Gate B is **PARTIALLY VERIFIED / STAGING BLOCKED**: local persistence/security drills passed, but hosted identity, the isolated hosted workspace/database and RLS, independently deployed kill/revocation, external backup restore and monitoring remain unverified. Gate C is **LOCAL VERIFIED / EXTERNAL STAGING BLOCKED**: no authorized Shopify development store/app or trusted HTTPS endpoints exist, so no OAuth install, live webhook, provider price write, Shopify-side revocation or external evidence occurred. No Shopify capability was promoted to M4 and Gate D did not start.
+
+The remaining material code risk is the Shopify owner/provider read→write race: Shopify exposes no generic compare-and-swap for this operation. HOTL retains the provider read, policy check, provider re-read, final local/emergency check and write sequence; this narrows but cannot eliminate an external edit in the final gap. Provider calls still run while the serialized transaction is held; documented wait budgets and timeout tests cover only this narrow one-variant workflow, not scale or hard end-to-end latency guarantees.

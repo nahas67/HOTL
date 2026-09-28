@@ -13,7 +13,7 @@ The owner decision must cover:
 | Area | Values to decide |
 | --- | --- |
 | Business profile | Seller's legal country, target sales market, Shopify development-store channel, customer profile, product/category, supplier model and origin, fulfillment model, currency, return model, expected order value, sales target and target period. |
-| Unit economics | Supplier cost, inbound freight, outbound shipping, packaging, store fees, payment fees, advertising acquisition estimate, refund and return allowances, fulfillment expense, tax treatment, target contribution, break-even CAC and break-even ROAS. |
+| Unit economics | Supplier cost, inbound freight, outbound shipping, packaging, store fees, payment fees, planned advertising acquisition cost per order, refund and return allowances, fulfillment expense, tax/duty per order, target contribution amount per order, break-even CAC amount and break-even ROAS ratio. |
 | Capital and exposure | Maximum pilot capital, protected reserve, daily/weekly/monthly spend, advertising exposure, supplier exposure, inventory exposure, experiment loss, refund authority and maximum single autonomous transaction. |
 | Stop conditions | Metric, threshold, unit, measurement window, authoritative data source and response for each business stop rule. |
 
@@ -51,18 +51,19 @@ Release the app version and approve those scopes during installation. A declared
 
 Before setting live mode, provision a separate workspace and database/login for the staging instance. Do not reuse the simulation ledger or local provider credentials. Apply the existing migrations and verify workspace RLS/grants, backups and restore. Deploy the kill service independently with separate credentials, state and revocation authority; never put its deployment secrets in the main app pipeline.
 
-The existing [static staging preflight](../scripts/staging-readiness.mjs) checks only configuration shape. Its relevant variables are:
+The [Gate C preflight v2](../scripts/staging-readiness.mjs) reports static configuration separately from explicit read-only HTTPS probes. Its relevant variables are:
 
 | Component | Variables |
 | --- | --- |
-| Staging identity and ledger | `HOTL_MODE`, `GUARDRAIL_WORKSPACE_ID`, `GUARDRAIL_DATABASE_URL`, `GUARDRAIL_AUTHORIZATION_VERSION`, `AGENT_JWT_KEYS`, `OWNER_USER_IDS`, `SUPABASE_URL` |
-| Trusted origins | `HOTL_PUBLIC_ORIGIN`, `SHOPIFY_REDIRECT_URI`, `SHOPIFY_WEBHOOK_ORIGIN`, `KILL_SWITCH_URL` |
-| Shopify app | `SHOPIFY_CLIENT_ID`, `SHOPIFY_CLIENT_SECRET`, `SHOPIFY_STAGING_SHOPS`, `SHOPIFY_SCOPES` |
+| Staging identity and ledger | `HOTL_MODE`, `GUARDRAIL_WORKSPACE_ID`, `GUARDRAIL_DATABASE_URL`, `GUARDRAIL_AUTHORIZATION_VERSION`, `AGENT_JWT_KEYS`, `OWNER_USER_IDS`, `SUPABASE_URL`, initialization flags disabled |
+| Trusted origins | `HOTL_PUBLIC_ORIGIN`, `SHOPIFY_REDIRECT_URI`, `SHOPIFY_WEBHOOK_ORIGIN`, a separately hosted root `KILL_SWITCH_URL` |
+| Shopify app | `SHOPIFY_CLIENT_ID`, `SHOPIFY_CLIENT_SECRET`, exactly one `SHOPIFY_STAGING_SHOPS` development-store allowlist entry, `SHOPIFY_SCOPES`, explicit `SHOPIFY_RECONCILIATION_MODE` |
 | Credential storage and emergency read | `CONNECTOR_ENCRYPTION_KEY`, `KILL_SWITCH_READ_TOKEN` |
+| Restore and explicit read-only probes | `HOTL_BACKUP_RESTORE_TARGET`; `HOTL_GUARDRAIL_READINESS_URL`, `HOTL_SHOPIFY_INGRESS_READINESS_URL` and `KILL_SWITCH_STATE_URL` for `--active` |
 
 Set these only in the appropriate staging service's secret manager. The Shopify client secret, connector-encryption key and emergency read token belong in server-side secret storage; never paste them into chat, evidence, a browser bundle or the cockpit. Shopify app credentials and connector-encryption material belong only to the guardrail service. Emergency deployment credentials stay exclusively with the separately deployed emergency service.
 
-The preflight must pass in the isolated staging environment, but that is only a configuration check. Gate B still needs actual TLS, identity, database/RLS, restore and independent emergency evidence. Gate C then needs real OAuth, sync, webhook, one owner-approved variant price change, provider read-back, reconciliation, retry/race/uncertainty/restart/compensation and emergency-denial evidence. Record sanitized identifiers and results in the [Gate C evidence ledger](../evidence/gate-c-first-shopify-proof/README.md).
+Run `node scripts/staging-readiness.mjs --json` for an exact machine-readable static missing list. Only after the HTTPS staging endpoints exist, explicitly run `node scripts/staging-readiness.mjs --active --json`; its GET-only probes do not write to Shopify. It will probe the owner callback with a cookie-free request, webhook ingress readiness, guardrail database/workspace/kill-reader readiness, and the independent kill-state reader. Static configuration and successful health probes still do not establish Shopify connectivity, webhook delivery, runtime DB DDL denial, independent deployment, backup restore, or a price mutation. Gate B needs actual TLS, identity, database/RLS, restore and independent-emergency evidence. Gate C needs real OAuth, sync, webhook, one owner-approved variant price change, provider read-back, reconciliation, retry/race/uncertainty/restart/compensation and emergency-denial evidence. Record sanitized identifiers and results in the [Gate C evidence ledger](../evidence/gate-c-first-shopify-proof/README.md).
 
 ## 4. What to send back
 

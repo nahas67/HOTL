@@ -32,6 +32,7 @@ class FaultingStore implements RuntimeStateStore {
 
 const dirs: string[] = [];
 const actor = { type: 'owner' as const, id: 'merchant-owner' };
+const encryptedFixture = [Buffer.alloc(12, 1).toString('base64'), Buffer.alloc(16, 2).toString('base64'), Buffer.from('{}').toString('base64')].join('.');
 afterEach(async () => { await Promise.all(dirs.splice(0).map(path => rm(path, { recursive: true, force: true }))); });
 async function fixture(extra: Partial<EngineOptions> = {}, approvePilot = true) {
   const directory = await mkdtemp(join(tmpdir(), 'hotl-price-')); dirs.push(directory);
@@ -49,18 +50,43 @@ async function fixture(extra: Partial<EngineOptions> = {}, approvePilot = true) 
   }
   const variant: MerchantVariant = { installationId, ownerId: actor.id, variantId: 'gid://shopify/ProductVariant/123', productId: 'gid://shopify/Product/12', title: 'Test item', sku: 'T-1', price: '100.00', currency: 'USD', providerRevision: now.toISOString(), observedAt: now.toISOString(), revision: 1, requestId: 'fixture-read', economics: { landedCost: 30, estimatedCac: 5, category: 'Home', evidence: 'Owner supplied test cost', validUntil: '2026-09-18T12:00:00.000Z' } };
   await engine.extensionTransaction('integration.fixture', {}, actor, 'seed', state => {
-    state.extensions!.shopifyOAuth = { version: 1, workspaceId: 'workspace', pending: [], installations: [{ id: installationId, workspaceId: 'workspace', ownerId: actor.id, shop: 'staging-shop.myshopify.com', clientId: 'fixture-client', revision: 1, scopes: ['read_products', 'write_products'], status: 'INSTALLED', createdAt: now.toISOString(), installedAt: now.toISOString(), expiresAt: '2026-09-18T12:00:00.000Z', refreshExpiresAt: '2026-10-01T12:00:00.000Z', encryptedTokens: 'fixture-not-a-real-token' }] };
+    state.extensions!.shopifyOAuth = { version: 1, workspaceId: 'workspace', pending: [], installations: [{ id: installationId, workspaceId: 'workspace', ownerId: actor.id, shop: 'staging-shop.myshopify.com', clientId: 'fixture-client', revision: 1, scopes: ['read_products', 'write_products'], status: 'INSTALLED', createdAt: now.toISOString(), installedAt: now.toISOString(), expiresAt: '2026-09-18T12:00:00.000Z', refreshExpiresAt: '2026-10-01T12:00:00.000Z', encryptedTokens: encryptedFixture }] };
     shopifyData(state).variants.push(structuredClone(variant)); return { seeded: true };
   });
   variant.developmentStore = true;
   let remote = { ...variant };
-  const port: ShopifyPricePort = { read: vi.fn(async () => ({ ...remote })), write: vi.fn(async (_productId, _id, price) => { remote = { ...remote, price, providerRevision: '2026-09-17T12:00:01.000Z' }; return { requestId: 'fixture-write' }; }), locations: async () => [] };
+  const port: ShopifyPricePort = { read: vi.fn(async () => ({ variantId: remote.variantId, productId: remote.productId, price: remote.price,
+    currency: remote.currency, providerRevision: remote.providerRevision, requestId: remote.requestId, developmentStore: remote.developmentStore })),
+    write: vi.fn(async (_productId, _id, price) => { remote = { ...remote, price, providerRevision: '2026-09-17T12:00:01.000Z' }; return { requestId: 'fixture-write' }; }), locations: async () => [] };
   const oauth = { accessToken: async () => ({ shop: 'staging-shop.myshopify.com', accessToken: 'fixture-token', revision: 1, scopes: ['write_products'] }) } as unknown as ShopifyOAuthService;
   const service = new ShopifyCommerceService(engine, oauth, { webhookSecret: 'fixture-secret', port: () => port, now: () => now });
   const input = { installationId, variantId: variant.variantId, expectedRevision: 1, expectedConstitutionVersion: policyVersion, price: '110.00', reason: 'Owner-reviewed staging price experiment' };
   return { engine, options, port, oauth, service, input, variant, now, setKill: () => { stopped = true; }, changeRemote: (price: string) => { remote = { ...remote, price, providerRevision: '2026-09-17T12:00:02.000Z' }; } };
 }
 describe('guarded Shopify staging price execution', () => {
+  it('measures the serialized read-policy-read-write-read transaction path under injected latency', async () => {
+    let killChecks = 0;
+    const f = await fixture({ killSwitchReader: async () => {
+      killChecks++;
+      await new Promise(resolve => setTimeout(resolve, 20));
+      return { engaged: false };
+    } });
+    const proposal = await f.engine.prepareShopifyPrice(f.input, actor, 'timed-proposal');
+    const reads: string[] = [];
+    const originalRead = f.port.read.bind(f.port), originalWrite = f.port.write.bind(f.port);
+    const delay = () => new Promise(resolve => setTimeout(resolve, 20));
+    f.port.read = vi.fn(async id => { reads.push('read'); await delay(); return originalRead(id); });
+    f.port.write = vi.fn(async (product, id, price) => { reads.push('write'); await delay(); return originalWrite(product, id, price); });
+    const checksBeforeDispatch = killChecks, started = performance.now();
+    const result = await f.service.execute(String(proposal.operationId), actor);
+    const elapsed = performance.now() - started;
+    expect(result).toMatchObject({ decision: 'allow', status: 'CONFIRMED' });
+    expect(reads).toEqual(['read', 'read', 'write', 'read']);
+    expect(killChecks - checksBeforeDispatch).toBe(3);
+    expect(elapsed).toBeGreaterThanOrEqual(100);
+    expect(elapsed).toBeLessThan(2000);
+  });
+
   it('denies a real-mode price proposal until the owner has approved the pilot envelope', async () => {
     const f = await fixture({}, false);
     expect(await f.engine.prepareShopifyPrice(f.input, actor, 'unapproved')).toMatchObject({ decision: 'deny', reason: 'PILOT_APPROVAL_REQUIRED' });
@@ -71,7 +97,7 @@ describe('guarded Shopify staging price execution', () => {
     await f.engine.extensionTransaction('integration.fixture.uncertain', {}, actor, 'uncertain-fixture', state => {
       shopifyData(state).operations.push({ id: randomUUID(), ownerId: actor.id, installationRevision: 1,
         input: { ...f.input, variantId: 'gid://shopify/ProductVariant/999' },
-        before: f.variant, createdAt: f.now.toISOString(), status: 'UNKNOWN' });
+        before: { ...f.variant, variantId: 'gid://shopify/ProductVariant/999' }, createdAt: f.now.toISOString(), status: 'DISPATCHING', claim: randomUUID() });
       return { seeded: true };
     });
     expect(await f.engine.prepareShopifyPrice(f.input, actor, 'stop-rule')).toMatchObject({ decision: 'deny', reason: 'PILOT_STOP_UNCERTAIN_PROVIDER_OPERATIONS' });

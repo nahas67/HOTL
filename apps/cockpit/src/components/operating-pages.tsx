@@ -20,7 +20,10 @@ import {
   autonomyDomains,
   constitutionPatchSchema,
   emptyPilotDraft,
+  PILOT_ECONOMICS_FORMULA_VERSION,
   pilotDraftSchema,
+  pilotDraftReadSchema,
+  pilotEconomicsCalculationIssues,
   pilotStopMetricSchema,
   type BusinessConstitution,
   type ConstitutionHistory,
@@ -152,7 +155,7 @@ type PilotDatum = {
   provenance: "UNKNOWN" | "OWNER_ENTERED" | "PROVIDER_OBSERVED" | "CONTRACTUAL" | "CALCULATED" | "ESTIMATED";
   evidenceRef?: string;
 };
-type PilotField = { key: string; label: string; kind: "text" | "money" | "country" | "currency" | "channel" };
+type PilotField = { key: string; label: string; kind: "text" | "money" | "ratio" | "country" | "currency" | "channel" };
 const pilotFields: Record<PilotSection, PilotField[]> = {
   profile: [
     { key: "country", label: "Pilot country", kind: "country" },
@@ -173,14 +176,15 @@ const pilotFields: Record<PilotSection, PilotField[]> = {
     { key: "packaging", label: "Packaging", kind: "money" },
     { key: "storeFees", label: "Store or channel fees", kind: "money" },
     { key: "paymentFees", label: "Payment fees", kind: "money" },
-    { key: "advertisingAcquisition", label: "Advertising acquisition estimate", kind: "money" },
+    { key: "advertisingAcquisition", label: "Planned advertising acquisition cost per order", kind: "money" },
     { key: "refundAllowance", label: "Refund allowance", kind: "money" },
     { key: "returnAllowance", label: "Return allowance", kind: "money" },
     { key: "fulfillmentExpense", label: "Fulfillment expense", kind: "money" },
     { key: "taxHandling", label: "Tax handling and reserves", kind: "text" },
-    { key: "targetContribution", label: "Target contribution", kind: "money" },
-    { key: "breakEvenCac", label: "Break-even CAC", kind: "money" },
-    { key: "breakEvenRoas", label: "Break-even ROAS", kind: "money" },
+    { key: "taxAndDutyPerOrder", label: "Tax and duty cost per order", kind: "money" },
+    { key: "targetContribution", label: "Target contribution per order (after modeled variable costs)", kind: "money" },
+    { key: "breakEvenCac", label: "Break-even CAC amount per order", kind: "money" },
+    { key: "breakEvenRoas", label: "Break-even ROAS ratio", kind: "ratio" },
   ],
   capital: [
     { key: "maxPilotCapital", label: "Maximum pilot capital", kind: "money" },
@@ -229,6 +233,7 @@ export function pilotDraftGaps(draft: PilotDraft): string[] {
       gaps.push(`${titleCase(rule.metric)} has no live deterministic signal yet`);
   }
   if (draft.profile.currency.value !== null && draft.profile.currency.value !== "USD") gaps.push("Pilot currency must be USD for current guardrails");
+  for (const issue of pilotEconomicsCalculationIssues(draft)) gaps.push(`${titleCase(issue.field)}: ${issue.message}`);
   return gaps;
 }
 
@@ -268,7 +273,7 @@ export function ConstitutionPage({
   useEffect(() => {
     if (resource.data && !draft) {
       setDraft(resource.data.constitution);
-      setPilotDraft(resource.data.constitution.pilot?.draft ?? emptyPilotDraft());
+      setPilotDraft(pilotDraftReadSchema.parse(resource.data.constitution.pilot?.draft ?? emptyPilotDraft()));
       loadCountries(resource.data.constitution);
       setAdvisory(JSON.stringify(resource.data.constitution.advisory, null, 2));
     }
@@ -277,7 +282,7 @@ export function ConstitutionPage({
     const loaded = await resource.refresh();
     if (loaded) {
       setDraft(loaded.constitution);
-      setPilotDraft(loaded.constitution.pilot?.draft ?? emptyPilotDraft());
+      setPilotDraft(pilotDraftReadSchema.parse(loaded.constitution.pilot?.draft ?? emptyPilotDraft()));
       loadCountries(loaded.constitution);
       setAdvisory(JSON.stringify(loaded.constitution.advisory, null, 2));
       setReason("");
@@ -320,7 +325,7 @@ export function ConstitutionPage({
       }
       if (loaded) {
         setDraft(loaded.constitution);
-        setPilotDraft(loaded.constitution.pilot?.draft ?? emptyPilotDraft());
+        setPilotDraft(pilotDraftReadSchema.parse(loaded.constitution.pilot?.draft ?? emptyPilotDraft()));
         loadCountries(loaded.constitution);
         setAdvisory(JSON.stringify(loaded.constitution.advisory, null, 2));
       }
@@ -365,7 +370,7 @@ export function ConstitutionPage({
       }
       if (loaded) {
         setDraft(loaded.constitution);
-        setPilotDraft(loaded.constitution.pilot?.draft ?? emptyPilotDraft());
+        setPilotDraft(pilotDraftReadSchema.parse(loaded.constitution.pilot?.draft ?? emptyPilotDraft()));
         loadCountries(loaded.constitution);
         setAdvisory(JSON.stringify(loaded.constitution.advisory, null, 2));
       }
@@ -396,7 +401,7 @@ export function ConstitutionPage({
       }
       if (loaded) {
         setDraft(loaded.constitution);
-        setPilotDraft(loaded.constitution.pilot?.draft ?? emptyPilotDraft());
+        setPilotDraft(pilotDraftReadSchema.parse(loaded.constitution.pilot?.draft ?? emptyPilotDraft()));
         loadCountries(loaded.constitution);
         setAdvisory(JSON.stringify(loaded.constitution.advisory, null, 2));
       }
@@ -449,6 +454,7 @@ export function ConstitutionPage({
         <div className="os-pilot-field-grid">
           <label className="form-label" htmlFor={fieldId}>
             Value {field.kind === "money" && <span>{pilotDraft.profile.currency.value ?? "Currency UNKNOWN"}</span>}
+            {field.kind === "ratio" && <span>ratio (×)</span>}
             {field.kind === "channel" ? (
               <select id={fieldId} disabled={unknown} value={inputValue} onChange={(event) => update({ value: event.target.value })}>
                 <option value="">Select channel</option>
@@ -458,15 +464,15 @@ export function ConstitutionPage({
             ) : (
               <input
                 id={fieldId}
-                type={field.kind === "money" ? "number" : "text"}
-                min={field.kind === "money" ? "0" : undefined}
-                max={field.kind === "money" ? "1000000" : undefined}
-                step={field.kind === "money" ? "0.01" : undefined}
+                type={field.kind === "money" || field.kind === "ratio" ? "number" : "text"}
+                min={field.kind === "money" || field.kind === "ratio" ? "0" : undefined}
+                max={field.kind === "money" ? "1000000" : field.kind === "ratio" ? "100000" : undefined}
+                step={field.kind === "money" ? "0.01" : field.kind === "ratio" ? "0.0001" : undefined}
                 maxLength={field.kind === "country" ? 2 : field.kind === "currency" ? 3 : 500}
                 disabled={unknown}
                 value={inputValue}
                 placeholder={unknown ? "UNKNOWN" : "Enter value"}
-                onChange={(event) => update({ value: field.kind === "money" ? (event.target.value === "" ? Number.NaN : Number(event.target.value)) : ["country", "currency"].includes(field.kind) ? event.target.value.toUpperCase() : event.target.value })}
+                onChange={(event) => update({ value: field.kind === "money" || field.kind === "ratio" ? (event.target.value === "" ? Number.NaN : Number(event.target.value)) : ["country", "currency"].includes(field.kind) ? event.target.value.toUpperCase() : event.target.value })}
               />
             )}
           </label>
@@ -479,7 +485,8 @@ export function ConstitutionPage({
                 const provenance = event.target.value as PilotDatum["provenance"];
                 updatePilotField(section, field.key, provenance === "UNKNOWN"
                   ? { value: null, provenance: "UNKNOWN" }
-                  : { value: unknown ? (field.kind === "money" ? Number.NaN : "") : item.value, provenance, evidenceRef: unknown ? "" : item.evidenceRef ?? "" });
+                  : { value: unknown ? (field.kind === "money" || field.kind === "ratio" ? Number.NaN : "") : item.value, provenance,
+                      evidenceRef: provenance === "CALCULATED" ? PILOT_ECONOMICS_FORMULA_VERSION : unknown ? "" : item.evidenceRef ?? "" });
               }}
             >
               {pilotProvenance.map((source) => <option key={source} value={source}>{titleCase(source)}</option>)}
@@ -492,6 +499,7 @@ export function ConstitutionPage({
             <input id={`${fieldId}-evidence`} maxLength={500} value={item.evidenceRef ?? ""} onChange={(event) => update({ evidenceRef: event.target.value })} placeholder="Source and date" />
           </label>
         )}
+        {field.key === "breakEvenRoas" && <p className="os-pilot-help">Calculated metrics use {PILOT_ECONOMICS_FORMULA_VERSION}; break-even ROAS is expected order value divided by pre-ad contribution per order.</p>}
       </fieldset>
     );
   }

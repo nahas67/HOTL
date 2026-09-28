@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { HttpTransport } from '@hotl/connector-sdk';
-import { shopifyPricePort } from '../src/shopify-provider.js';
+import { shopifyPricePort, SHOPIFY_PRICE_HTTP_TIMEOUT_MS } from '../src/shopify-provider.js';
 
 const shop = 'fixture.myshopify.com', accessToken = 'fixture-provider-secret';
 const variantId = 'gid://shopify/ProductVariant/101', productId = 'gid://shopify/Product/10';
@@ -8,11 +8,11 @@ const shopData = { currencyCode: 'USD', myshopifyDomain: shop, plan: { partnerDe
 const variant = { id: variantId, price: '19.5', product: { id: productId, updatedAt: '2026-09-18T12:00:00.000Z' } };
 const readData = { shop: shopData, productVariant: variant };
 const writeData = { productVariantsBulkUpdate: { productVariants: [{ id: variantId, price: '20.00' }], userErrors: [] } };
-function fixture(data: unknown, status = 200, version: string | undefined = '2026-07') {
+function fixture(data: unknown, status = 200, version: string | undefined = '2026-07', timeoutMs = SHOPIFY_PRICE_HTTP_TIMEOUT_MS) {
   const headers: Record<string, string> = { 'x-request-id': 'provider-request-fixture' };
   if (version) headers['x-shopify-api-version'] = version;
   const transport = vi.fn<HttpTransport>(async () => ({ status, headers, body: JSON.stringify(data) }));
-  return { transport, port: shopifyPricePort(shop, accessToken, { transport }) };
+  return { transport, port: shopifyPricePort(shop, accessToken, { transport, timeoutMs }) };
 }
 
 describe('Shopify guarded price provider contract', () => {
@@ -51,6 +51,15 @@ describe('Shopify guarded price provider contract', () => {
     expect(body.variables).toEqual({ productId, variants: [{ id: variantId, price: '20.00' }] });
     expect(body.query).toContain('allowPartialUpdates: false');
     expect(f.transport).toHaveBeenCalledTimes(1);
+  });
+
+  it('aborts one price-provider POST at its configured timeout without retrying', async () => {
+    expect(SHOPIFY_PRICE_HTTP_TIMEOUT_MS).toBe(4000);
+    const transport = vi.fn<HttpTransport>(async () => new Promise(() => {}));
+    const port = shopifyPricePort(shop, accessToken, { transport, timeoutMs: 20 });
+    await expect(port.write(productId, variantId, '20.00')).rejects.toMatchObject({ code: 'TIMEOUT' });
+    expect(transport).toHaveBeenCalledTimes(1);
+    expect(transport.mock.calls[0][0].signal?.aborted).toBe(true);
   });
 
   it.each([
