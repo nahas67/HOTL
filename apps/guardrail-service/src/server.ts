@@ -5,6 +5,7 @@ import { registerOperatingRoutes } from './operating-routes.js';
 import { PostgresRuntimeStateStore, RuntimeStoreError } from './stores/postgres.js';
 import { createIdentity, type IdentityOptions, type Principal } from './identity.js';
 import { registerShopifyRoutes } from './shopify-routes.js';
+import { checkStagingReadiness } from '../../../scripts/staging-readiness.mjs';
 
 export type ServerOptions = Omit<IdentityOptions,'mode'> & {engine?:GuardrailEngine;mode?:'simulation'|'live';logger?:boolean};
 const readHeader=(request:FastifyRequest,name:string)=>{const value=request.headers[name];return typeof value==='string'?value:'';};
@@ -55,15 +56,18 @@ export async function createServer(options:ServerOptions={}) {
     try {
       if(mode!=='live'||!databaseUrl||!present(process.env.KILL_SWITCH_URL)||!present(process.env.KILL_SWITCH_READ_TOKEN))
         return reply.status(503).send({status:'not_ready',service:'guardrail-service'});
+      if(!store)return reply.status(503).send({status:'not_ready',service:'guardrail-service'});
       await engine.snapshot();
+      await store.verifyRuntimePrivileges();
       const kill=await engine.killState();
       return {status:'ready',service:'guardrail-service',mode,persistence:'available',workspaceBinding:'verified',
-        runtimeRole:'non-superuser-no-bypassrls',killReader:'reachable',killEngaged:kill.engaged};
+        runtimeRole:'non-superuser-no-bypassrls',runtimeDdl:'denied',killReader:'reachable',killEngaged:kill.engaged};
     } catch {
       return reply.status(503).send({status:'not_ready',service:'guardrail-service'});
     }
   });
   app.get('/api/identity',async request=>({actor:await requireAccess(request,'owner',true),mode}));
+  app.get('/api/staging-readiness',async request=>{await requireAccess(request,'owner',true);return checkStagingReadiness(process.env);});
   app.get('/api/catalog',async()=>({products:(await engine.snapshot()).products.filter(item=>item.status==='active').map(({landedCost:_landedCost,estimatedCac:_estimatedCac,...product})=>product),mode}));
   const base='/api/guardrails/v1';
   for(const path of ['/api/agent-context',`${base}/agent-context`])app.get(path,async request=>{

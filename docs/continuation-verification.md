@@ -131,3 +131,25 @@ No live provider credential was found in the reviewed scan results, no secret va
 Gate A remains **OWNER INPUT REQUIRED**. Gate B staging remains **BLOCKED**. Gate C is **GATE C BLOCKED — external staging prerequisites absent**. No Shopify capability was promoted to M4; all related capabilities retain M2 local/integration maturity. The residual provider read→write race remains and was not measured externally. See the complete [dated evidence package](../evidence/gate-c-shopify-external-2026-09-28/README.md).
 
 Next checkpoint remains the unresolved Gate C prerequisite set: authenticated owner approval of the business/risk envelope plus isolated staging identity/database/emergency controls and the authorized Shopify development store/app with trusted HTTPS endpoints. Do not begin Gate D.
+
+## 2026-10-01 Gate A authorization + Gate C staging provisioning
+
+Status remains **STILL BLOCKED** for external staging. The owner has not supplied an approved pilot envelope, and the latest owner response says the Shopify development store/app are still not set up. This workstation's static process-environment preflight found 19 missing fields; it does not load a local `.env` or inspect a hosted secret manager. The sanitized result is [PREFLIGHT.json](../evidence/gate-a-c-staging-provisioning-2026-10-01/PREFLIGHT.json). Active probes were not run because the required staging HTTPS endpoints are absent.
+
+Local implementation now exposes owner-authenticated `GET /api/staging-readiness` through the cockpit. It returns missing field names and reasons but never environment values. The Shopify integration panel separates Gate A approval, configured settings, read-only probe status, and unverified external provider evidence. Provider writes remain governed by the existing guardrail and are not enabled by this checklist.
+
+The live guardrail readiness probe no longer emits a fixed PostgreSQL role assertion. It queries effective database/schema DDL rights, elevated role membership, and database/schema/application-object ownership for the workspace-bound login; missing, misbound, unsafe, or unreachable checks fail readiness. Active preflight now requires both the non-superuser/no-BYPASSRLS and no-DDL evidence fields.
+
+| Check | Result | Scope |
+| --- | --- | --- |
+| `node --test tests/staging-readiness.test.mjs` | **PASSED: 11 tests** | Static redaction, configuration boundaries, active-probe denial when no-DDL proof is absent. |
+| Guardrail server tests | **PASSED** | Owner-only static report, secret-value redaction, and live readiness denial without the private PostgreSQL store. |
+| Cockpit tests | **PASSED: 7 tests** | Gate A and staging checklist distinctions. |
+| Guardrail/cockpit typechecks | **PASSED** | Package TypeScript checks. |
+| `bash infra/scripts/test-runtime-ledger.sh` (Git Bash with MSYS path conversion disabled) | **PASSED: 33 PostgreSQL 18.6 tests**, restart and backup/restore digest, restored RLS/grant and append-only checks. | Unique disposable container/network; random port bound to loopback; ownership-checked cleanup. |
+| Static shell preflight | **BLOCKED: 19 missing fields** | No values emitted; active probes remain `NOT_RUN`; `externalStagingVerified` remains false. |
+| Shopify Dev Dashboard, OAuth, webhook delivery, or price write | **NOT RUN** | No authenticated Shopify account/store/app or trusted public callback/webhook was available. |
+
+No real price mutation, Gate C external evidence drill, or Gate D workflow was attempted. The ready-to-share source ZIP was created before this code delta as requested and is 4.75 MB; see `HOTL-updated-share-2026-10-01.zip` and its in-archive manifest for included files and exclusions.
+
+Owner actions to unblock: enter real business/legal/product/economics/risk values and approve them in the authenticated Business Constitution cockpit; set up one authorized Shopify development store and dedicated API-only app; provision isolated hosted owner identity/database, HTTPS callback and webhook origins, independent emergency reader, secrets, and restore target; then run static and read-only staging probes from that environment. Do not send secrets through chat. AI may assist with research but must not invent or approve Gate A authority.

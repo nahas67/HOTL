@@ -4,6 +4,8 @@ Checkpoint date: 2026-09-23
 Workspace: `C:\Users\nahas\OneDrive\Desktop\HOTL`  
 Runtime status: local simulation is runnable; this checkpoint does not claim a running demo or deployed production service.
 
+**Latest continuation:** See [2026-10-01 Gate A + Gate C provisioning](evidence/gate-a-c-staging-provisioning-2026-10-01/README.md). That dated record supersedes older readiness/test status below where it differs. `HOTL-before-continuation-2026-10-01.zip` preserves the pre-work snapshot; `HOTL-updated-share-2026-10-01.zip` includes this continuation's code and evidence. Both archives have manifests and are below 500 MB.
+
 **Prompt-engineer handoff:** See [PROJECT_CURRENT_STATE.md](PROJECT_CURRENT_STATE.md) for a dated, detailed snapshot of backend, frontend, database, memory, feature status, safety contracts, evidence, gaps and next gates. This supplements this checkpoint and preserves the original prompts; it does not replace them.
 
 This file is the continuation and handoff record for the platform built from
@@ -359,3 +361,9 @@ Gate A remains owner-input-required, with legal seller jurisdiction and financia
 The fresh static preflight remains blocked by 19 missing staging settings; worker and reconciliation readiness are blocked, active probes are not run, and external staging verification is false. No Shopify/provider or staging request occurred. The authorized development store/app and public HTTPS callback/webhook remain not set up. Gate A is not approved: AI research recommendations are advisory, and legal jurisdiction, verified economics, capital/reserve, risk limits, and stop thresholds are not recorded in the authenticated cockpit. See the [detailed drill status](evidence/gate-c-shopify-external-2026-09-28/DRILL_STATUS.md), [sanitized preflight](evidence/gate-c-shopify-external-2026-09-28/PREFLIGHT.json), and [official Shopify baseline](evidence/gate-c-shopify-external-2026-09-28/SHOPIFY_BASELINE.md).
 
 No external Shopify evidence or M4 maturity was added. The next checkpoint remains Gate C setup and owner authority, not Gate D. The local read→write race remains a residual risk.
+
+## 2026-10-01 Gate A authorization + Gate C staging provisioning
+
+The complete delta, validation, and owner actions are recorded in [the dated provisioning checkpoint](evidence/gate-a-c-staging-provisioning-2026-10-01/README.md). The cockpit now shows an owner-only static readiness checklist and keeps configured settings distinct from external proof. The live PostgreSQL health check validates effective DDL/ownership privileges; the disposable PostgreSQL 18.6 runtime-ledger, restart, and restore drill passed.
+
+Gate A remains **OWNER INPUT + APPROVAL REQUIRED**. Gate C remains **STILL BLOCKED**: this workstation's static preflight has 19 missing settings, no active endpoints, and no authorized Shopify store/app evidence. No Shopify OAuth, webhook delivery, real price write, or provider-side revocation was attempted. Do not start Gate D.

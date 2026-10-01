@@ -516,6 +516,34 @@
   font-weight: 500;
   text-align: right;
 }
+.os-readiness-list {
+  margin: 15px 0;
+}
+.os-readiness-list > div {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.8fr) minmax(0, 1.5fr);
+  gap: 14px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+}
+.os-readiness-list dt {
+  color: var(--muted);
+}
+.os-readiness-list dd {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.os-readiness-list dd span {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.6;
+}
+.os-manifest li code {
+  color: var(--ink);
+}
 .os-footnote {
   color: var(--muted);
   font-size: 11px;
@@ -811,6 +839,10 @@
 @media (max-width: 900px) {
   .os-connection-grid {
     grid-template-columns: 1fr;
+  }
+  .os-readiness-list > div {
+    grid-template-columns: 1fr;
+    gap: 6px;
   }
   .os-domain-row {
     grid-template-columns: 1fr 1fr;

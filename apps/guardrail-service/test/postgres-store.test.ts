@@ -192,6 +192,24 @@ describe.skipIf(!enabled)(
       ).rows.map((row: { entry: unknown }) => row.entry);
 
     describe("real GuardrailEngine with PostgreSQL persistence", () => {
+      it("verifies a scoped runtime role and rejects a newly granted schema DDL privilege", async () => {
+        const workspaceId = randomUUID();
+        const instance = await store(workspaceId);
+        await expect(instance.verifyRuntimePrivileges()).resolves.toBeUndefined();
+
+        const connectionString = await scopedUrl(workspaceId);
+        const role = new URL(connectionString).username;
+        expect(role).toMatch(/^runtime_[a-f0-9]{32}$/);
+        await admin.query(`GRANT CREATE ON SCHEMA hotl_runtime TO ${role}`);
+        try {
+          await expect(instance.verifyRuntimePrivileges()).rejects.toMatchObject({
+            code: "RUNTIME_PRIVILEGES_UNSAFE",
+          });
+        } finally {
+          await admin.query(`REVOKE CREATE ON SCHEMA hotl_runtime FROM ${role}`);
+        }
+      });
+
       it("requires explicit first-time initialization and never creates state during a failed normal startup", async () => {
         const workspaceId = randomUUID();
         const instance = await store(workspaceId);

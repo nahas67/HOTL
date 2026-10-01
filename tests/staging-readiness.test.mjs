@@ -8,7 +8,7 @@ const good = () => ({
   SUPABASE_URL: 'https://auth.example.com', OWNER_USER_IDS: 'owner-1',
   AGENT_JWT_KEYS: JSON.stringify({ key1: 'x'.repeat(32) }), HOTL_PUBLIC_ORIGIN: 'https://owner.example.com',
   SHOPIFY_REDIRECT_URI: 'https://owner.example.com/api/shopify/oauth/callback',
-  SHOPIFY_WEBHOOK_ORIGIN: 'https://hooks.example.com', SHOPIFY_CLIENT_ID: 'fixture-app', SHOPIFY_CLIENT_SECRET: 'fixture-secret',
+  SHOPIFY_WEBHOOK_ORIGIN: 'https://hooks.example.com', SHOPIFY_CLIENT_ID: 'fixture-app', SHOPIFY_CLIENT_SECRET: 'fixture-secret-16',
   SHOPIFY_STAGING_SHOPS: 'pilot.myshopify.com', SHOPIFY_SCOPES: 'read_products,write_products,read_inventory,read_locations',
   SHOPIFY_RECONCILIATION_MODE: 'OWNER_MANUAL', HOTL_BACKUP_RESTORE_TARGET: 'staging-restore-drill-2026',
   HOTL_GUARDRAIL_READINESS_URL: 'https://guardrails.example.com/health/ready',
@@ -49,6 +49,20 @@ test('reports field names without echoing credential values', () => {
   assert.doesNotMatch(output, /not-a-key|fixture-independent-reader|postgresql:\/\//);
 });
 
+test('requires the runtime minimum Shopify client-secret length without treating the fixture as provider proof', () => {
+  const input = good();
+  for (let length = 1; length < 16; length++) {
+    input.SHOPIFY_CLIENT_SECRET = 'x'.repeat(length);
+    const result = checkStagingReadiness(input);
+    assert.ok(result.failures.some(item => item.field === 'SHOPIFY_CLIENT_SECRET'), `length ${length} should block`);
+  }
+  input.SHOPIFY_CLIENT_SECRET = 'x'.repeat(16);
+  const acceptedShape = checkStagingReadiness(input);
+  assert.ok(!acceptedShape.failures.some(item => item.field === 'SHOPIFY_CLIENT_SECRET'));
+  assert.equal(acceptedShape.externalStagingVerified, false);
+  assert.equal(acceptedShape.activeProbes.status, 'NOT_RUN');
+});
+
 test('rejects IP-literal and local webhook origins even when they use HTTPS', () => {
   const input = good();
   input.SHOPIFY_WEBHOOK_ORIGIN = 'https://192.168.1.10';
@@ -71,7 +85,7 @@ test('active probes are opt-in, read-only GET requests, and preserve manual-work
     calls.push({ url: String(url), options });
     if (String(url).endsWith('/api/shopify/oauth/callback')) return { ok: false, status: 403, json: async () => ({}) };
     const body = String(url).endsWith('/health/ready')
-      ? { status: 'ready', persistence: 'available', workspaceBinding: 'verified', runtimeRole: 'non-superuser-no-bypassrls', killReader: 'reachable' }
+      ? { status: 'ready', persistence: 'available', workspaceBinding: 'verified', runtimeRole: 'non-superuser-no-bypassrls', runtimeDdl: 'denied', killReader: 'reachable' }
       : String(url).endsWith('/state') ? { engaged: false }
         : { status: 'ready', ingressReady: true, workerReady: false, reconciliationReady: true, reconciliationMode: 'OWNER_MANUAL' };
     return { ok: true, status: 200, json: async () => body };
@@ -97,6 +111,22 @@ test('active probes block on absent endpoints and reject unsafe URLs without mak
   const unsafe = await runActiveStagingProbes(input, { fetchImpl: async () => { count++; throw new Error('unexpected request'); } });
   assert.equal(unsafe.status, 'BLOCKED');
   assert.equal(count, 0);
+});
+
+test('guardrail active probe rejects a readiness response that omits the live no-DDL check', async () => {
+  const input = good();
+  const active = await runActiveStagingProbes(input, {
+    fetchImpl: async url => {
+      const isCallback = String(url).endsWith('/api/shopify/oauth/callback');
+      const body = String(url).endsWith('/health/ready')
+        ? { status: 'ready', persistence: 'available', workspaceBinding: 'verified', runtimeRole: 'non-superuser-no-bypassrls', killReader: 'reachable' }
+        : String(url).endsWith('/state') ? { engaged: false }
+          : { status: 'ready', ingressReady: true, workerReady: false, reconciliationReady: true, reconciliationMode: 'OWNER_MANUAL' };
+      return { ok: !isCallback, status: isCallback ? 403 : 200, json: async () => body };
+    },
+  });
+  assert.equal(active.status, 'BLOCKED');
+  assert.equal(active.results.find(item => item.name === 'GUARDRAIL_DATABASE_WORKSPACE_AND_KILL_READER')?.status, 'BLOCKED');
 });
 
 test('durable worker and explicitly disabled modes are reported separately', () => {

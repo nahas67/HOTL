@@ -236,6 +236,108 @@ export class PostgresRuntimeStateStore implements RuntimeStateStore {
     }
   }
 
+  /** Verify the live login can use the ledger but cannot administer its database objects. */
+  async verifyRuntimePrivileges(): Promise<void> {
+    const client = await this.#pool.connect();
+    let discard = false;
+    try {
+      await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
+      await client.query("SELECT set_config('hotl.workspace_id', $1, true)", [
+        this.#workspaceId,
+      ]);
+      const result = await client.query<{
+        workspace_id: string | null;
+        login_superuser: boolean;
+        login_bypasses_rls: boolean;
+        login_can_create_roles: boolean;
+        login_can_create_databases: boolean;
+        unsafe_role_membership: boolean;
+        can_create_database: boolean;
+        can_create_schema: boolean;
+        owns_database: boolean;
+        owns_schema_or_objects: boolean;
+      }>(`
+        SELECT hotl_runtime.current_workspace() AS workspace_id,
+          login.rolsuper AS login_superuser,
+          login.rolbypassrls AS login_bypasses_rls,
+          login.rolcreaterole AS login_can_create_roles,
+          login.rolcreatedb AS login_can_create_databases,
+          EXISTS (
+            SELECT 1 FROM pg_catalog.pg_roles elevated
+            WHERE (elevated.rolsuper OR elevated.rolbypassrls OR elevated.rolcreaterole OR elevated.rolcreatedb)
+              AND (elevated.oid = login.oid OR pg_catalog.pg_has_role(session_user, elevated.oid, 'MEMBER'))
+          ) AS unsafe_role_membership,
+          pg_catalog.has_database_privilege(current_user, current_database(), 'CREATE') AS can_create_database,
+          EXISTS (
+            SELECT 1 FROM pg_catalog.pg_namespace n
+            WHERE n.nspname NOT LIKE 'pg_%' AND n.nspname <> 'information_schema'
+              AND pg_catalog.has_schema_privilege(current_user, n.oid, 'CREATE')
+          ) AS can_create_schema,
+          EXISTS (
+            SELECT 1 FROM pg_catalog.pg_database d
+            WHERE d.datname = current_database()
+              AND (d.datdba = (SELECT oid FROM pg_catalog.pg_roles WHERE rolname = session_user)
+                OR pg_catalog.pg_has_role(session_user, d.datdba, 'MEMBER'))
+          ) AS owns_database,
+          EXISTS (
+            SELECT 1 FROM pg_catalog.pg_namespace n
+            WHERE n.nspname NOT LIKE 'pg_%' AND n.nspname <> 'information_schema'
+              AND (n.nspowner = (SELECT oid FROM pg_catalog.pg_roles WHERE rolname = session_user)
+                OR pg_catalog.pg_has_role(session_user, n.nspowner, 'MEMBER'))
+          ) OR EXISTS (
+            SELECT 1 FROM pg_catalog.pg_class c
+            JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname NOT LIKE 'pg_%' AND n.nspname <> 'information_schema'
+              AND (c.relowner = (SELECT oid FROM pg_catalog.pg_roles WHERE rolname = session_user)
+                OR pg_catalog.pg_has_role(session_user, c.relowner, 'MEMBER'))
+          ) OR EXISTS (
+            SELECT 1 FROM pg_catalog.pg_proc p
+            JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+            WHERE n.nspname NOT LIKE 'pg_%' AND n.nspname <> 'information_schema'
+              AND (p.proowner = (SELECT oid FROM pg_catalog.pg_roles WHERE rolname = session_user)
+                OR pg_catalog.pg_has_role(session_user, p.proowner, 'MEMBER'))
+          ) OR EXISTS (
+            SELECT 1 FROM pg_catalog.pg_shdepend dependency
+            WHERE dependency.refclassid = 'pg_catalog.pg_authid'::regclass
+              AND dependency.dbid = (SELECT oid FROM pg_catalog.pg_database WHERE datname = current_database())
+              AND dependency.deptype = 'o'
+              AND (dependency.refobjid = login.oid OR pg_catalog.pg_has_role(session_user, dependency.refobjid, 'MEMBER'))
+          ) AS owns_schema_or_objects
+        FROM pg_catalog.pg_roles login
+        WHERE login.rolname = session_user
+      `);
+      const role = result.rows[0];
+      if (
+        !role ||
+        role.workspace_id !== this.#workspaceId ||
+        role.login_superuser ||
+        role.login_bypasses_rls ||
+        role.login_can_create_roles ||
+        role.login_can_create_databases ||
+        role.unsafe_role_membership ||
+        role.can_create_database ||
+        role.can_create_schema ||
+        role.owns_database ||
+        role.owns_schema_or_objects
+      ) {
+        throw new RuntimeStoreError(
+          "RUNTIME_PRIVILEGES_UNSAFE",
+          "The workspace-bound database login must not hold database administration, DDL, or application-object ownership privileges.",
+        );
+      }
+      await client.query("COMMIT");
+    } catch (error) {
+      try {
+        await client.query("ROLLBACK");
+      } catch {
+        discard = true;
+      }
+      throw error;
+    } finally {
+      client.release(discard);
+    }
+  }
+
   async transaction<T>(
     callback: (
       current: EngineState | null,

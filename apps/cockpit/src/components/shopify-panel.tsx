@@ -10,6 +10,7 @@ import {
   type ConstitutionResponse,
   type OperatingApi,
 } from "./operating-pages";
+import { buildStagingReadinessRows, type StagingReadinessReport } from "@/lib/staging-readiness";
 
 type Installation = {
   id: string;
@@ -128,6 +129,7 @@ export function ShopifyPanel({ api }: { api: OperatingApi }) {
     api,
     "constitution",
   );
+  const readiness = useOperatingResource<StagingReadinessReport>(api, "staging-readiness");
   const [shop, setShop] = useState("");
   const [webhookTopic, setWebhookTopic] = useState<(typeof webhookTopics)[number]>("products/update");
   const [busy, setBusy] = useState(false);
@@ -214,6 +216,10 @@ export function ShopifyPanel({ api }: { api: OperatingApi }) {
     } finally { setBusy(false); }
   }
   const data = resource.data;
+  const constitution = policy.data?.constitution;
+  const gateAApproved = !!constitution?.pilot?.approval && constitution.pilot.approval.constitutionVersion === constitution.version;
+  const gateAStatus = policy.error ? "CHECK UNAVAILABLE · BLOCKED" : !constitution ? "CHECKING" : gateAApproved ? `OWNER APPROVED · VERSION ${constitution.version}` : "OWNER INPUT + APPROVAL REQUIRED";
+  const readinessRows = readiness.data ? buildStagingReadinessRows(readiness.data, gateAStatus) : [];
   const cancellable = cancellation && data?.operations.some(
     (operation) => operation.id === cancellation.id && operation.status === "PENDING",
   );
@@ -232,10 +238,11 @@ export function ShopifyPanel({ api }: { api: OperatingApi }) {
           </p>
         </div>
         <ActionButton
-          busy={busy || resource.loading}
+          busy={busy || resource.loading || readiness.loading}
           onClick={() => {
             void resource.refresh();
             void policy.refresh();
+            void readiness.refresh();
           }}
         >
           Refresh status
@@ -247,6 +254,29 @@ export function ShopifyPanel({ api }: { api: OperatingApi }) {
         Shopify development stores. A queued job or saved proposal does not mean
         a provider write succeeded.
       </Notice>
+      <section className="os-review-context" aria-label="Gate A and Gate C staging readiness">
+        <div className="os-toolbar">
+          <div>
+            <h3>Gate A + Gate C readiness</h3>
+            <p>Static settings and read-only checks are shown separately from external Shopify evidence.</p>
+          </div>
+          <strong>{readiness.data?.staticConfiguration.status ?? (readiness.loading ? "CHECKING" : "UNAVAILABLE")}</strong>
+        </div>
+        {readiness.error && <Notice error>{readiness.error}</Notice>}
+        {readiness.data && <>
+          <dl className="os-readiness-list">
+            {readinessRows.map((row) => <div key={row.label}>
+              <dt>{row.label}</dt>
+              <dd><strong>{row.status}</strong><span>{row.detail}</span></dd>
+            </div>)}
+          </dl>
+          {!!readiness.data.failures.length && <details className="os-manifest">
+            <summary>{readiness.data.failures.length} missing or invalid static settings</summary>
+            <ul>{readiness.data.failures.map((failure) => <li key={failure.field}><code>{failure.field}</code>: {failure.reason}</li>)}</ul>
+          </details>}
+          <p className="os-footnote">Provider write status remains disabled for this preflight. AI-generated business recommendations cannot substitute for owner-entered evidence or approval.</p>
+        </>}
+      </section>
       {(error || resource.error) && (
         <Notice error>{error || resource.error}</Notice>
       )}

@@ -55,7 +55,7 @@ export function checkStagingReadiness(env) {
   const webhook = publicHttps(env.SHOPIFY_WEBHOOK_ORIGIN);
   requireField('SHOPIFY_WEBHOOK_ORIGIN', webhook && webhook.pathname === '/', 'A public HTTPS guardrail webhook origin is required.');
   requireField('SHOPIFY_CLIENT_ID', present(env.SHOPIFY_CLIENT_ID), 'A development app ID is required.');
-  requireField('SHOPIFY_CLIENT_SECRET', present(env.SHOPIFY_CLIENT_SECRET), 'A development app secret is required in the guardrail environment.');
+  requireField('SHOPIFY_CLIENT_SECRET', typeof env.SHOPIFY_CLIENT_SECRET === 'string' && env.SHOPIFY_CLIENT_SECRET.length >= 16, 'A development app secret of at least 16 characters is required in the guardrail environment.');
   requireField('SHOPIFY_STAGING_SHOPS', (env.SHOPIFY_STAGING_SHOPS ?? '').split(',').filter(Boolean).length === 1 && shop.test((env.SHOPIFY_STAGING_SHOPS ?? '').trim()), 'Exactly one explicitly allowlisted myshopify.com development store is required.');
   const scopes = new Set((env.SHOPIFY_SCOPES ?? '').split(',').map(value => value.trim()));
   requireField('SHOPIFY_SCOPES', ['read_products', 'write_products', 'read_inventory', 'read_locations'].every(value => scopes.has(value)), 'Required pilot read and product-write scopes are missing.');
@@ -121,7 +121,7 @@ export async function runActiveStagingProbes(env, { fetchImpl = fetch, timeoutMs
     return { status: 'BLOCKED', required: activeProbeRequirements, notProbed: activeProbeLimitations, missing: ['HTTPS endpoints with the exact read-only paths and KILL_SWITCH_READ_TOKEN'], results: [] };
   }
   const probes = [
-    { name: 'GUARDRAIL_DATABASE_WORKSPACE_AND_KILL_READER', url: guardrail, headers: {}, check: (response, body) => response.ok && body.status === 'ready' && body.persistence === 'available' && body.workspaceBinding === 'verified' && body.runtimeRole === 'non-superuser-no-bypassrls' && body.killReader === 'reachable' },
+    { name: 'GUARDRAIL_DATABASE_WORKSPACE_AND_KILL_READER', url: guardrail, headers: {}, check: (response, body) => response.ok && body.status === 'ready' && body.persistence === 'available' && body.workspaceBinding === 'verified' && body.runtimeRole === 'non-superuser-no-bypassrls' && body.runtimeDdl === 'denied' && body.killReader === 'reachable' },
     { name: 'SHOPIFY_INGRESS_AND_RECONCILIATION_MODE', url: ingress, headers: {}, check: (response, body) => response.ok && body.status === 'ready' && body.ingressReady === true && body.reconciliationReady === true },
     { name: 'SHOPIFY_OAUTH_CALLBACK_ROUTE', url: callback, headers: {}, check: response => response.status === 403 },
     { name: 'INDEPENDENT_KILL_STATE_READER', url: kill, headers: { authorization: `Bearer ${env.KILL_SWITCH_READ_TOKEN}` }, check: (response, body) => response.ok && typeof body.engaged === 'boolean' },

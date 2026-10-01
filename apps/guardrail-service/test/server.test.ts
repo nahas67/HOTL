@@ -18,6 +18,30 @@ describe('HTTP boundary and authorization',()=>{
     const overview=await app.inject({url:'/api/overview',headers:ownerHeaders});expect(overview.statusCode).toBe(200);expect(overview.json().interrupts).toHaveLength(3);
     await app.close();
   });
+  it('exposes secret-free static staging readiness to owners only',async()=>{
+    const secret='private-fixture-client-secret-never-return';
+    vi.stubEnv('SHOPIFY_CLIENT_SECRET',secret);
+    const app=await createServer({engine:await createEngine(),internalToken:'test-secret'});
+    expect((await app.inject({url:'/api/staging-readiness'})).statusCode).toBe(401);
+    expect((await app.inject({url:'/api/staging-readiness',headers:{...ownerHeaders,'x-hotl-agent-id':'sourcing_agent'}})).statusCode).toBe(403);
+    const response=await app.inject({url:'/api/staging-readiness',headers:ownerHeaders});
+    expect(response.statusCode).toBe(200);
+    const report=response.json();
+    expect(report.staticConfiguration.evidenceScope).toBe('STATIC_CONFIGURATION_ONLY');
+    expect(report.staticConfiguration.status).toBe('BLOCKED');
+    expect(report.activeProbes.status).toBe('NOT_RUN');
+    expect(report.externalStagingVerified).toBe(false);
+    expect(JSON.stringify(report)).not.toContain(secret);
+    await app.close();
+  });
+  it('does not report live readiness without the private PostgreSQL store',async()=>{
+    const workspaceId='11111111-1111-4111-8111-111111111111';
+    const app=await createServer({engine:await createEngine({mode:'live'}),mode:'live',workspaceId,internalToken:'local-rejected',agentJwtSecret:'test-secret-longer-than-thirty-two-characters'});
+    const response=await app.inject({url:'/health/ready'});
+    expect(response.statusCode).toBe(503);
+    expect(response.json().status).toBe('not_ready');
+    await app.close();
+  });
   it('does not permit an agent to resolve interrupts, modify controls, or use another department scope',async()=>{
     const app=await createServer({engine:await createEngine(),internalToken:'test-secret'});
     const headers={...ownerHeaders,'x-hotl-agent-id':'support_agent'};

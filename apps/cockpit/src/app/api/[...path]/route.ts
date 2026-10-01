@@ -27,7 +27,7 @@ async function handle(request: Request, context: { params: Promise<{ path: strin
     let result;
     if (request.method === 'GET' && ['telemetry', 'interrupts', 'audit-log', 'status'].includes(route)) {
       result = await upstream(guardrail, `${prefix}/${route}`, auth);
-    } else if (request.method === 'GET' && ['constitution', 'operating-state', 'integrations', 'shopify'].includes(route)) {
+    } else if (request.method === 'GET' && ['constitution', 'operating-state', 'integrations', 'shopify', 'staging-readiness'].includes(route)) {
       result = await upstream(guardrail, `/api/${route}`, auth);
     } else if (request.method === 'POST' && path[0] === 'shopify' && shopifyMutationSchema(path)) {
       result = await upstream(guardrail, `${prefix}/${path.join('/')}`, headers, 'POST', shopifyMutationSchema(path)!.parse(await request.json()));
