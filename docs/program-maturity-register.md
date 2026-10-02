@@ -1,6 +1,6 @@
 # Program maturity register
 
-**Reviewed:** 2026-09-28
+**Reviewed:** 2026-10-03
 
 **Status source:** [locked program plan](locked-program-plan.md) §3 and [continuation evidence](continuation-verification.md).
 **Rule:** Each row has exactly one M0–M7 state. A local check never grants an external or production state. Reassess when new evidence is recorded.
@@ -34,3 +34,5 @@
 M0 on a **real business capability** can coexist with a simulated workflow for that domain. `M3` here means locally verified cross-service integration; it does not imply `M4` external staging. No Shopify capability was promoted by the 2026-09-28 local hardening. The first planned promotion target is the bounded Shopify development-store path after the real evidence in [Gate C](locked-program-plan.md) is produced.
 
 **2026-09-28 external evidence review:** The new [Gate C evidence checkpoint](../evidence/gate-c-shopify-external-2026-09-28/README.md) reran static preflight and confirmed that external staging is still blocked. No live Shopify request occurred. OAuth, sync, webhook, guarded price, and preflight maturity therefore remain **M2 — local/integration verified**; no capability was promoted to M4. The external blocker is infrastructure/authority availability, not a failed mocked or intercepted provider test.
+
+**2026-10-03 Sites review:** A private static owner checkpoint is hosted on ChatGPT Sites. It has no HOTL API, backend, provider connection, or commerce action. This is a presentation deployment, not a new business capability or Gate B/C staging proof; no Maturity level changed. The `Production deployment and hosted identity` row continues to describe the protected HOTL runtime, which has no verified production deployment or hosted HOTL identity. See the [Sites deployment evidence](../evidence/chatgpt-sites-deployment-2026-10-03/README.md).
