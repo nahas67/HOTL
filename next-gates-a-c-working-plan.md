@@ -1,6 +1,6 @@
 # Next Working Plan — Complete Gates A–C
 
-**Updated:** 2026-09-28
+**Updated:** 2026-10-03
 
 **Current state:** Gate A needs owner-verified facts and approval; Gate B staging evidence is incomplete; Gate C Shopify staging is not set up. Market screening found no product ready for launch; an under-desk tray is only the lowest-complexity research lead.
 
@@ -28,6 +28,10 @@ The independent local portion of the plan is complete: strict Shopify persisted-
 Verification passed for lint, workspace typecheck, package/root tests, build, isolated browser tests, the native migration/authorization drill and the native PostgreSQL runtime restart/backup-restore drill. Docker restore is **UNRUN — DOCKER DAEMON UNAVAILABLE**. Static preflight is intentionally blocked with 19 missing settings; active probes were not run. This does not satisfy external staging.
 
 The next work is owner/infrastructure work: confirm legitimate Gate A business inputs and record approval in the authenticated cockpit; provision the dedicated hosted Gate B identity/database/RLS/backups and separately deployed emergency service; then create the authorized Shopify development store/app and trusted HTTPS callback/webhook. Only after these prerequisites exist should an operator run preflight probes and the controlled Gate C drill. Gate D remains out of scope.
+
+## Runtime-role denial follow-up — 2026-10-03
+
+The local Gate B privilege test now covers both direct schema DDL grants and an inherited PostgreSQL `CREATEROLE` role. All 33 tests in the disposable PostgreSQL 18.6 runtime-ledger drill passed, including restart and backup/restore authorization checks. This does not satisfy hosted staging evidence. The next actionable milestone is still owner/infrastructure provisioning; no new commerce domain should be started while the first real Shopify proof is a prerequisite. See [the dated test evidence](evidence/gate-b-runtime-role-escalation-2026-10-03/README.md).
 
 ## Done when
 

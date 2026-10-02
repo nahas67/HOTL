@@ -1,6 +1,6 @@
 # HOTL Project Current State and Prompt-Engineer Handoff
 
-**Snapshot date:** 2026-10-01
+**Snapshot date:** 2026-10-03
 **Repository:** `C:\Users\nahas\OneDrive\Desktop\HOTL`  
 **Purpose:** Give a prompt engineer and technical reviewer a detailed, loss-resistant picture of what this project is, what is implemented, what evidence exists, what remains, and which constraints must remain in force.
 
@@ -182,7 +182,7 @@ Treat these as non-negotiable invariants from `AGENTS.md` and the source prompts
 
 ## 10. Latest recorded validation and its limits
 
-The latest dated checkpoint is [2026-10-01 Gate A + Gate C provisioning](evidence/gate-a-c-staging-provisioning-2026-10-01/README.md). It adds an owner-only static preflight view, verifies effective runtime PostgreSQL privileges rather than trusting a fixed label, passes the disposable PostgreSQL 18.6 restart/restore drill (33 tests), and records that external staging remains blocked. Its [sanitized preflight](evidence/gate-a-c-staging-provisioning-2026-10-01/PREFLIGHT.json) was run in the current shell environment only; 19 fields are missing and active probes were not run. The full release checks listed below are historical and must be rerun before a release claim.
+The latest dated checkpoint is [the 2026-10-03 runtime-role escalation denial follow-up](evidence/gate-b-runtime-role-escalation-2026-10-03/README.md), extending the [2026-10-01 Gate A + Gate C provisioning checkpoint](evidence/gate-a-c-staging-provisioning-2026-10-01/README.md). PostgreSQL readiness now has a regression drill for both direct schema DDL and inherited `CREATEROLE` membership; all 33 disposable PostgreSQL 18.6 tests plus restart/restore checks passed. This is local evidence only. The [sanitized static preflight](evidence/gate-a-c-staging-provisioning-2026-10-01/PREFLIGHT.json) still reports 19 missing fields, active probes were not run, and external staging remains blocked. The full release checks listed below are historical and must be rerun before a release claim.
 
 The base release-validation ledger is dated **2026-09-23**. Its local release checks were:
 

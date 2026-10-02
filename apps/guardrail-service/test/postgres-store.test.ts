@@ -192,7 +192,7 @@ describe.skipIf(!enabled)(
       ).rows.map((row: { entry: unknown }) => row.entry);
 
     describe("real GuardrailEngine with PostgreSQL persistence", () => {
-      it("verifies a scoped runtime role and rejects a newly granted schema DDL privilege", async () => {
+      it("verifies a scoped runtime role and rejects direct or inherited elevated privileges", async () => {
         const workspaceId = randomUUID();
         const instance = await store(workspaceId);
         await expect(instance.verifyRuntimePrivileges()).resolves.toBeUndefined();
@@ -207,6 +207,18 @@ describe.skipIf(!enabled)(
           });
         } finally {
           await admin.query(`REVOKE CREATE ON SCHEMA hotl_runtime FROM ${role}`);
+        }
+
+        const elevatedRole = `hotl_probe_${randomUUID().replaceAll("-", "")}`;
+        await admin.query(`CREATE ROLE ${elevatedRole} NOLOGIN CREATEROLE`);
+        try {
+          await admin.query(`GRANT ${elevatedRole} TO ${role}`);
+          await expect(instance.verifyRuntimePrivileges()).rejects.toMatchObject({
+            code: "RUNTIME_PRIVILEGES_UNSAFE",
+          });
+        } finally {
+          await admin.query(`REVOKE ${elevatedRole} FROM ${role}`);
+          await admin.query(`DROP ROLE ${elevatedRole}`);
         }
       });
 

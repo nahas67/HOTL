@@ -153,3 +153,15 @@ The live guardrail readiness probe no longer emits a fixed PostgreSQL role asser
 No real price mutation, Gate C external evidence drill, or Gate D workflow was attempted. The ready-to-share source ZIP was created before this code delta as requested and is 4.75 MB; see `HOTL-updated-share-2026-10-01.zip` and its in-archive manifest for included files and exclusions.
 
 Owner actions to unblock: enter real business/legal/product/economics/risk values and approve them in the authenticated Business Constitution cockpit; set up one authorized Shopify development store and dedicated API-only app; provision isolated hosted owner identity/database, HTTPS callback and webhook origins, independent emergency reader, secrets, and restore target; then run static and read-only staging probes from that environment. Do not send secrets through chat. AI may assist with research but must not invent or approve Gate A authority.
+
+## 2026-10-03 Gate B runtime-role privilege follow-up
+
+The PostgreSQL runtime-readiness integration test now exercises two unsafe privilege states for a disposable scoped login: direct `CREATE` on `hotl_runtime`, and inherited membership in a temporary `CREATEROLE` role. In both cases `verifyRuntimePrivileges()` must reject with `RUNTIME_PRIVILEGES_UNSAFE`; the test revokes/drops its temporary grants and role. The passing drill provides local denial evidence only and says nothing about a hosted staging login.
+
+| Check | Result | Scope |
+| --- | --- | --- |
+| `pnpm --filter @hotl/guardrail-service typecheck` | **PASSED** | Re-run after the test change. |
+| `infra/scripts/test-runtime-ledger.sh` (Git Bash; `MSYS_NO_PATHCONV=1`) | **PASSED: 33 PostgreSQL 18.6 tests** | Disposable labeled container/network, loopback-only port, restart digest, backup/restore digest, restored RLS/grant/binding/append-only denial checks, ownership-checked cleanup. |
+| Hosted Gate B role / active HTTPS readiness | **NOT VERIFIED** | No staging host, hosted login or public readiness endpoints were available or contacted. |
+
+Gate A remains owner-input-and-approval-required; Gate C remains blocked because the authorized Shopify development store/app and trusted staging endpoints are not set up. No Shopify OAuth, provider mutation or Gate D work occurred. The next work remains owner/infrastructure provisioning, not a new commerce domain.

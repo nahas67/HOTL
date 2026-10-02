@@ -4,7 +4,7 @@ Checkpoint date: 2026-09-23
 Workspace: `C:\Users\nahas\OneDrive\Desktop\HOTL`  
 Runtime status: local simulation is runnable; this checkpoint does not claim a running demo or deployed production service.
 
-**Latest continuation:** See [2026-10-01 Gate A + Gate C provisioning](evidence/gate-a-c-staging-provisioning-2026-10-01/README.md). That dated record supersedes older readiness/test status below where it differs. `HOTL-before-continuation-2026-10-01.zip` preserves the pre-work snapshot; `HOTL-updated-share-2026-10-01.zip` includes this continuation's code and evidence. Both archives have manifests and are below 500 MB.
+**Latest continuation:** See [the 2026-10-03 runtime-role escalation denial follow-up](evidence/gate-b-runtime-role-escalation-2026-10-03/README.md), alongside the [2026-10-01 Gate A + Gate C provisioning checkpoint](evidence/gate-a-c-staging-provisioning-2026-10-01/README.md). These records supersede older readiness/test status below where they differ. `HOTL-before-continuation-2026-10-01.zip` preserves the pre-work snapshot. The latest share archive is `HOTL-updated-share-2026-10-03.zip`; each archive has an in-archive manifest and is below 500 MB.
 
 **Prompt-engineer handoff:** See [PROJECT_CURRENT_STATE.md](PROJECT_CURRENT_STATE.md) for a dated, detailed snapshot of backend, frontend, database, memory, feature status, safety contracts, evidence, gaps and next gates. This supplements this checkpoint and preserves the original prompts; it does not replace them.
 
@@ -367,3 +367,7 @@ No external Shopify evidence or M4 maturity was added. The next checkpoint remai
 The complete delta, validation, and owner actions are recorded in [the dated provisioning checkpoint](evidence/gate-a-c-staging-provisioning-2026-10-01/README.md). The cockpit now shows an owner-only static readiness checklist and keeps configured settings distinct from external proof. The live PostgreSQL health check validates effective DDL/ownership privileges; the disposable PostgreSQL 18.6 runtime-ledger, restart, and restore drill passed.
 
 Gate A remains **OWNER INPUT + APPROVAL REQUIRED**. Gate C remains **STILL BLOCKED**: this workstation's static preflight has 19 missing settings, no active endpoints, and no authorized Shopify store/app evidence. No Shopify OAuth, webhook delivery, real price write, or provider-side revocation was attempted. Do not start Gate D.
+
+## 2026-10-03 Gate B runtime-role privilege follow-up
+
+The live PostgreSQL readiness test now proves denial for a scoped runtime login with either direct `CREATE` on the application schema or inherited membership in a `CREATEROLE` role. The isolated PostgreSQL 18.6 runtime-ledger drill passed all 33 tests, restart, backup/restore digest and restored RLS/grant/binding/append-only checks. See the [dated evidence note](evidence/gate-b-runtime-role-escalation-2026-10-03/README.md) and [verification ledger](docs/continuation-verification.md#2026-10-03-gate-b-runtime-role-privilege-follow-up). This closes a local test gap only: no hosted role, Shopify endpoint or production deployment was inspected, and Gates A–C remain blocked on their owner and infrastructure prerequisites.
