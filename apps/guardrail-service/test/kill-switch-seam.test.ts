@@ -88,7 +88,6 @@ describe('kill-switch to guardrail HTTP seam', () => {
     const guard = await guardrail(kill.url);
     // Healthy and unengaged: the action is evaluated normally.
     const before = await (await guard.call()).json();
-    console.log('SEAM DEBUG', JSON.stringify(before), guard.url, kill.url);
     expect(before).toMatchObject({ decision: expect.any(String) });
     expect((await kill.engage()).status).toBe(202);
     const after = await (await guard.call()).json();

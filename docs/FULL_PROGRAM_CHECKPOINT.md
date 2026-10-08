@@ -42,7 +42,7 @@ Harness: `scripts/verify-suite.ps1`; raw logs in `artifacts/verify-2026-10-08/` 
 | Lint | `pnpm lint` | **PASS** (exit 0) |
 | Typecheck | `pnpm exec turbo run typecheck --force` | **PASS** — 11/11 successful, **0 cached** (`typecheck.log`) |
 | Unit/workspace tests | `pnpm exec turbo run test --concurrency=2 --force` | **PASS** — **0 cached**, 11/11 turbo tasks (`test.log`) |
-| Root tests | `node --test tests/*.test.mjs` | **PASS** — 12/12 (`test-root.log`) |
+| Root tests | `node --test tests/*.test.mjs` | **PASS** — 21/21, 0 skipped (`test-root.log`) |
 | Build | `pnpm build` | **PASS** (exit 0) |
 | Browser drill | `pnpm test:e2e` | **PASS** — **11/11 passed** (`e2e.log`). See the flake note below: this result is not unconditional. |
 | Migration + RLS drill | `pwsh -File infra/scripts/test-database.ps1` | **PASS** — includes the new direct-`append_audit` denial |
@@ -67,6 +67,20 @@ The failure is `platform.spec.ts` *"a cockpit cycle pauses in LangGraph and resu
 Treat "e2e 11/11" as **observed, not guaranteed**, until this is root-caused.
 
 These are **local** results. They do not satisfy any hosted or provider requirement.
+
+Per-package test totals behind the `test.log` row, for traceability:
+
+| Package | Files | Passed | Skipped |
+| --- | --- | --- | --- |
+| `@hotl/guardrail-service` | 25 | 300 | 26 (PostgreSQL, run by the drill) |
+| `@hotl/orchestrator` | 4 | 39 | 0 |
+| `@hotl/cockpit` | 6 | 35 | 0 |
+| `@hotl/connector-sdk` | 3 | 49 | 0 |
+| `@hotl/commerce-core` | 1 | 17 | 0 |
+| `@hotl/kill-switch` | 2 | 15 | 0 |
+| `@hotl/storefront` | 1 | 7 | 0 (was 0 with `--passWithNoTests` before this session) |
+| root `tests/*.test.mjs` | 3 | 21 | 0 |
+| `apps/commerce-core/medusa` (own runner) | 2 | 25 | 0 |
 
 ### 0.2 Remote reconciliation — the prior checkpoint's CP-00, now closed
 
