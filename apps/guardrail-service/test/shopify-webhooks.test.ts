@@ -6,8 +6,13 @@ import { randomUUID } from 'node:crypto';
 import { createEngine, type EngineOptions } from '../src/engine.js';
 import { ShopifyCommerceService } from '../src/shopify-service.js';
 import { shopifyData } from '../src/shopify-state.js';
-import type { ShopifyOAuthService } from '../src/shopify-oauth.js';
+import { shopifyWebhookMac, type ShopifyOAuthService } from '../src/shopify-oauth.js';
 import type { ShopifyWebhookPort, ProviderSubscription } from '../src/shopify-webhooks.js';
+
+// The callback URL is installation-bound, so registration needs the connector encryption key.
+const MAC_KEY_BUFFER = Buffer.alloc(32, 9);
+const MAC_KEY = MAC_KEY_BUFFER.toString('base64');
+const macFor = (installationId: string) => shopifyWebhookMac(MAC_KEY_BUFFER, installationId);
 
 const actor = { type: 'owner' as const, id: 'webhook-owner' }, topic = 'products/update' as const;
 const encryptedFixture = [Buffer.alloc(12, 1).toString('base64'), Buffer.alloc(16, 2).toString('base64'), Buffer.from('{}').toString('base64')].join('.');
@@ -38,7 +43,7 @@ async function fixture() {
     }),
   };
   const oauth = { accessToken: async () => ({ shop, accessToken: 'fixture-token', revision: 1, scopes: ['read_products'] }), list: async () => ({ installations: [] }) } as unknown as ShopifyOAuthService;
-  const makeService = (using = engine) => new ShopifyCommerceService(using, oauth, { webhookSecret: 'fixture', webhookOrigin: 'https://hooks.example.com', webhookPort: () => port, now: () => now });
+  const makeService = (using = engine) => new ShopifyCommerceService(using, oauth, { webhookSecret: 'fixture', encryptionKey: MAC_KEY, webhookOrigin: 'https://hooks.example.com', webhookPort: () => port, now: () => now });
   return { engine, options, id, shop, remote, port, makeService, kill: () => { killed = true; }, normalStore: () => { developmentStore = false; }, loseResponse: () => { responseLost = true; } };
 }
 
@@ -68,7 +73,8 @@ describe('Shopify shop-scoped webhook registration', () => {
     vi.mocked(f.port.list).mockImplementation(async () => {
       calls++;
       if (calls === 2) f.remote.push({ id: 'gid://shopify/WebhookSubscription/9', topic: 'PRODUCTS_UPDATE',
-        uri: `https://hooks.example.com/api/shopify/webhooks/${f.id}`, format: 'JSON' });
+        // The exact endpoint this service would register, including the installation-bound MAC.
+        uri: `https://hooks.example.com/api/shopify/webhooks/${f.id}/${macFor(f.id)}`, format: 'JSON' });
       return { shop: f.shop, developmentStore: true, subscriptions: structuredClone(f.remote) };
     });
     expect(await f.makeService().ensureWebhook(f.id, topic, actor, 'race')).toMatchObject({ status: 'REJECTED', errorCode: 'WEBHOOK_ALREADY_EXISTS', providerWritePerformed: false });
@@ -97,7 +103,7 @@ describe('Shopify shop-scoped webhook registration', () => {
     await expect(f.makeService().ensureWebhook(f.id, topic, actor, 'kill')).rejects.toMatchObject({ code: 'KILL_SWITCH_ENGAGED' });
     await expect(f.makeService().ensureWebhook(f.id, topic, { type: 'owner', id: 'other' }, 'other')).rejects.toMatchObject({ code: 'SHOPIFY_INSTALLATION_NOT_FOUND' });
     const wrongOrigin = new ShopifyCommerceService(f.engine, { accessToken: async () => ({ shop: f.shop, accessToken: 'fixture', revision: 1 }) } as unknown as ShopifyOAuthService,
-      { webhookSecret: 'fixture', webhookOrigin: 'http://localhost:4000', webhookPort: () => f.port });
+      { webhookSecret: 'fixture', encryptionKey: MAC_KEY, webhookOrigin: 'http://localhost:4000', webhookPort: () => f.port });
     await expect(wrongOrigin.ensureWebhook(f.id, topic, actor, 'origin')).rejects.toMatchObject({ code: 'SHOPIFY_WEBHOOK_ORIGIN_INVALID' });
     expect(f.port.create).not.toHaveBeenCalled();
   });

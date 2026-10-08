@@ -72,8 +72,8 @@ Per-package test totals behind the `test.log` row, for traceability:
 
 | Package | Files | Passed | Skipped |
 | --- | --- | --- | --- |
-| `@hotl/guardrail-service` | 25 | 300 | 26 (PostgreSQL, run by the drill) |
-| `@hotl/orchestrator` | 4 | 39 | 0 |
+| `@hotl/guardrail-service` | 26 | 310 | 26 (PostgreSQL, run by the drill) |
+| `@hotl/orchestrator` | 5 | 41 | 0 |
 | `@hotl/cockpit` | 6 | 35 | 0 |
 | `@hotl/connector-sdk` | 3 | 49 | 0 |
 | `@hotl/commerce-core` | 1 | 17 | 0 |
@@ -303,7 +303,85 @@ Both boundaries now refuse to call it success:
 
 It is deliberately **not** mapped to a denial. An uncertain outcome is unknown, not refused, and conflating the two would let an operator conclude nothing happened when a write may have landed. Two tests in `apps/cockpit/src/lib/proxy.test.ts` cover both properties, including that it is not reported as a denial. **Verified they bite**: reverting the proxy change fails 2 of 35.
 
-### 0.6.16 Open, deferred
+### 0.6.16 Webhook callbacks are now bound to an installation
+
+The app-wide webhook secret is shared by **every** installation, so a body validly signed for
+store A was accepted at store B's endpoint and triggered a real provider read against a store the
+payload never came from. Verified in the audit before the fix.
+
+The callback URL is now `/api/shopify/webhooks/:id/:mac`, where `mac` is
+`base64url(HMAC-SHA256(CONNECTOR_ENCRYPTION_KEY, "hotl-shopify-webhook:v1:" + installation-id))`,
+43 URL-safe characters. The MAC is checked **first**, before HMAC and before any ledger read, so
+a wrong-MAC request never reaches either. The unbound two-segment shape is **removed, not kept as
+a fallback**: a hand-assembled URL is a hard 401.
+
+Two properties worth keeping in view: the URI is **deterministic per installation**, so
+re-registering after a Shopify-side deletion yields the same endpoint and an operator never hunts
+for a new URL; and the change was made **now** precisely because no live subscription exists — the
+breaking-change cost is zero today and would become permanent the moment a real store connects.
+
+Evidence: `test/shopify-webhook-mac.test.ts` (6 cases: determinism, URL-safe segment, per-installation
+and per-key binding, domain separation from a bare MAC and from `:v2`, 10 malformed presentations),
+plus an HTTP-level test that a **correctly signed** body carrying another installation's MAC is
+refused and triggers no provider read. **Verified it bites**: removing the MAC gate fails that test.
+
+**Residual, recorded not glossed:** losing only **one** container is still lazily re-initialised,
+because the commerce container is legitimately absent between install and first sync, so presence
+alone cannot distinguish that from a wipe.
+
+### 0.6.17 Silent loss of a Shopify extension container now denies
+
+Wholesale loss of both extension containers started the workspace with zero installations, zero
+variants and zero operations, and **no denial** — fail-silent, which rule 7 forbids. Detection
+uses the **hash-chained audit journal**, not a new persisted field: the journal is the only Shopify
+artefact outside the containers, and a new marker field would not survive the very event it exists
+to detect. Each container is matched against **its own** operation-name prefixes.
+
+That domain split is load-bearing: a first attempt matched all `integration.shopify.*` events
+against both containers and broke five tests, because a legitimate OAuth install writes
+installation-domain events while no commerce container exists yet. **Renaming an operation without
+updating the prefix list silently disables this detection.**
+
+### 0.6.18 Health readiness no longer overstates its state
+
+`ingressReady` required only that a service existed, while `webhookUri` needs a configured public
+HTTPS origin **and** the connector encryption key — registration would have thrown while health
+reported ready. `reconciliationReady` was `true` in `OWNER_MANUAL`, where no worker runs and the
+documentation promises `MANUAL_ONLY`. Both are now derived from what is actually configured and
+running, and the response carries the `MANUAL_ONLY` label.
+
+### 0.6.19 Orchestrator: a resolved interrupt is no longer advertised as pending
+
+`interruptId` was only overwritten when a decision was escalated *and* carried one, so the run
+kept advertising an approval the owner had already decided. The trap survived **three** clearing
+sites, not one — `execute()`, `sourcing_margin_gate` and `human_interrupt` — and fixing only the
+first would have left it open. All three now clear it, and an escalation carrying no id can no
+longer route to `human_interrupt` against a stale one.
+
+Separately, a rule-1 test now **proves** model output can never enter an authorization body: the
+model is stubbed with a unique sentinel, a full cycle runs, and every `execute` body is asserted
+to be sentinel-free. It was mutation-tested — an injected sentinel is caught — and guarded against
+vacuity, so deleting the model call cannot make it pass trivially.
+
+**Known, unproven:** a checkpoint persisted by *earlier* code is not migrated by this change. The
+id is now strictly derived and cleared on every path, so old threads self-heal on the next
+execution, but no fixture exercises a pre-change on-disk checkpoint. Correct long-term answer is
+to derive the pending interrupt rather than store it.
+
+### 0.6.20 A refused request no longer burns everyone else's key
+
+A pure denial changed nothing, yet it was recorded, so one actor could permanently block that key
+for every other actor and operation — including the owner. Denials are no longer recorded; a
+replayed denial is re-evaluated, which re-runs the policy and is strictly more conservative.
+Anything that mutated state still records, so replay protection for real effects is unchanged, and
+the **persisted key format is untouched** (see 0.6.13).
+
+This surfaced a stale-replay hazard rather than hiding it: a restored ledger previously replayed a
+cached `MARGIN_BELOW_FLOOR` denial even though the emergency plane was engaged. It now returns
+`KILL_SWITCH_ENGAGED`, which is what a test literally titled *"freshly enforces independent kill
+state after restore"* was asserting but did not actually check.
+
+### 0.6.21 Open, deferred
 
 Recorded so the register is complete. None is claimed as done.
 
@@ -311,11 +389,12 @@ Recorded so the register is complete. None is claimed as done.
 - Idempotency keys share one flat namespace and denials consume them.
 - Replayed historical `allow` is returned with no `replayed` marker.
 - `telemetry()` serves fabricated margin/chart with no provenance marker.
-- Webhook intake is bound to the app secret but not to an installation (cross-installation replay verified). The installation-bound MAC design was approved — there are no live subscriptions, so the breaking-change cost is zero today — but not implemented.
-- Orchestrator: stale `interruptId`, refund-policy reimplementation that has drifted from the guardrail, owner binding on read/resume, and the rule-1 "model output can never enter an authorization body" sentinel test.
-- `decision: 'unknown'` still crosses the HTTP boundary as **200 / `ok: true`**, so a lost provider response reads as success at the transport level even though the body is honest.
-- Shopify: readiness endpoint overstates ingress/reconciliation state; empty-extension loss is silently accepted; attempts-exhausted path now clears its claim.
-- `apps/storefront` origin/CSRF check has no test, and derives its expected origin from the request's own `Host` header when unconfigured.
+- Webhook intake is now installation-bound (§0.6.16). Losing only **one** extension container is still lazily re-initialised (§0.6.17).
+- Orchestrator: refund-policy reimplementation at `graph.ts:138` that has drifted from the guardrail, and owner binding on read/resume — both still deliberately sequenced behind guardrail work.
+- `apps/storefront` derives its expected origin from the request's own `Host` when `STOREFRONT_PUBLIC_ORIGIN` is unset; pinning it remains a staging prerequisite.
+- The `integration.shopify.*` prefix lists that drive extension-loss detection must move with any operation rename (§0.6.17).
+- A pre-change on-disk orchestrator checkpoint is not migrated by the interrupt-clearing change (§0.6.19).
+- Roughly one full e2e run in three fails with `503 / KILL_SWITCH_UNAVAILABLE` (§0.1.1).
 
 ## 0.1.1 Runtime-ledger drill — measured recovery evidence
 

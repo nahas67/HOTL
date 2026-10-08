@@ -6,9 +6,14 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { createEngine } from '../src/engine.js';
 import { ShopifyCommerceService } from '../src/shopify-service.js';
 import { shopifyData } from '../src/shopify-state.js';
-import type { ShopifyOAuthService } from '../src/shopify-oauth.js';
+import { shopifyWebhookMac, type ShopifyOAuthService } from '../src/shopify-oauth.js';
 
 const actor = { type: 'owner' as const, id: 'rotation-owner' };
+// Secret rotation changes the HMAC key; the installation-bound MAC is derived from the
+// connector encryption key and is unaffected by it, which is what these cases prove.
+const MAC_KEY_BUFFER = Buffer.alloc(32, 9);
+const MAC_KEY = MAC_KEY_BUFFER.toString('base64');
+const macFor = (installationId: string) => shopifyWebhookMac(MAC_KEY_BUFFER, installationId);
 const oauth = {} as ShopifyOAuthService;
 const currentSecret = 'current-webhook-fixture';
 const previousSecret = 'previous-webhook-fixture';
@@ -38,33 +43,33 @@ describe('Shopify webhook secret rotation', () => {
     const filePath = join(directory, 'state.json');
     const engine = await createEngine({ filePath, initializeEmptyFile: true, seed: false, now: () => now });
     const installationId = await seed(engine, now);
-    const overlap = { webhookSecret: currentSecret, previousWebhookSecret: previousSecret,
+    const overlap = { webhookSecret: currentSecret, encryptionKey: MAC_KEY, previousWebhookSecret: previousSecret,
       previousWebhookSecretValidUntil: '2026-10-01T10:00:00.000Z', now: () => now };
     const service = new ShopifyCommerceService(engine, oauth, overlap);
-    expect(await service.webhook(installationId, body, sign(previousSecret), 'old-before-restart', 'products/update'))
+    expect(await service.webhook(installationId, macFor(installationId), body, sign(previousSecret), 'old-before-restart', 'products/update'))
       .toMatchObject({ accepted: true, duplicate: false });
-    expect(await service.webhook(installationId, body, sign(currentSecret), 'current-during-overlap', 'products/update'))
+    expect(await service.webhook(installationId, macFor(installationId), body, sign(currentSecret), 'current-during-overlap', 'products/update'))
       .toMatchObject({ accepted: true, duplicate: true });
 
     now.setTime(Date.parse('2026-09-24T10:10:00.000Z'));
     const restartedEngine = await createEngine({ filePath, seed: false, now: () => now });
     const restartedService = new ShopifyCommerceService(restartedEngine, oauth, overlap);
-    expect(await restartedService.webhook(installationId, body, sign(previousSecret), 'old-after-restart', 'products/update'))
+    expect(await restartedService.webhook(installationId, macFor(installationId), body, sign(previousSecret), 'old-after-restart', 'products/update'))
       .toMatchObject({ accepted: true, duplicate: true });
-    await expect(restartedService.webhook(installationId, body, sign('invalid-webhook-fixture'), 'invalid', 'products/update'))
+    await expect(restartedService.webhook(installationId, macFor(installationId), body, sign('invalid-webhook-fixture'), 'invalid', 'products/update'))
       .rejects.toMatchObject({ code: 'INVALID_WEBHOOK' });
 
     now.setTime(Date.parse('2026-09-24T10:40:00.000Z'));
-    const postRevocation = { webhookSecret: currentSecret, previousWebhookSecret: previousSecret,
+    const postRevocation = { webhookSecret: currentSecret, encryptionKey: MAC_KEY, previousWebhookSecret: previousSecret,
       previousWebhookSecretRevokedAt: '2026-09-24T10:30:00.000Z',
       previousWebhookSecretValidUntil: '2026-09-24T11:15:00.000Z', now: () => now };
     const revokedService = new ShopifyCommerceService(restartedEngine, oauth, postRevocation);
-    expect(await revokedService.webhook(installationId, body, sign(previousSecret), 'old-after-revocation', 'products/update'))
+    expect(await revokedService.webhook(installationId, macFor(installationId), body, sign(previousSecret), 'old-after-revocation', 'products/update'))
       .toMatchObject({ accepted: true, duplicate: true });
     now.setTime(Date.parse('2026-09-24T11:15:01.000Z'));
-    await expect(revokedService.webhook(installationId, body, sign(previousSecret), 'old-after-transition', 'products/update'))
+    await expect(revokedService.webhook(installationId, macFor(installationId), body, sign(previousSecret), 'old-after-transition', 'products/update'))
       .rejects.toMatchObject({ code: 'INVALID_WEBHOOK' });
-    expect(await revokedService.webhook(installationId, body, sign(currentSecret), 'current-after-transition', 'products/update'))
+    expect(await revokedService.webhook(installationId, macFor(installationId), body, sign(currentSecret), 'current-after-transition', 'products/update'))
       .toMatchObject({ accepted: true, duplicate: true });
     expect(shopifyData(await restartedEngine.snapshot()).inbox).toHaveLength(1);
     const audit = JSON.stringify((await restartedEngine.snapshot()).audit);
@@ -85,7 +90,7 @@ describe('Shopify webhook secret rotation', () => {
       { previousWebhookSecret: previousSecret, previousWebhookSecretRevokedAt: '2026-09-24T10:00:00.000Z', previousWebhookSecretValidUntil: '2026-09-24T11:00:01.000Z' },
       { previousWebhookSecret: previousSecret, previousWebhookSecretRevokedAt: '2026-09-24T10:00:00.000Z', previousWebhookSecretValidUntil: '2026-09-24T09:59:00.000Z' },
       { previousWebhookSecret: currentSecret, previousWebhookSecretRevokedAt: '2026-09-24T10:00:00.000Z', previousWebhookSecretValidUntil: '2026-09-24T10:30:00.000Z' },
-    ]) expect(() => new ShopifyCommerceService(engine, oauth, { webhookSecret: currentSecret, now: () => now, ...rotation }))
+    ]) expect(() => new ShopifyCommerceService(engine, oauth, { webhookSecret: currentSecret, encryptionKey: MAC_KEY, now: () => now, ...rotation }))
       .toThrowError(expect.objectContaining({ code: 'SHOPIFY_WEBHOOK_ROTATION_INVALID' }));
   });
 });

@@ -64,6 +64,23 @@ describe('engine-level authorization and provenance', () => {
     expect((await engine.snapshot()).orders).toHaveLength(before.orders.length + 1);
   });
 
+  it('does not let a refused request consume another caller\'s idempotency key', async () => {
+    const engine = await ledger();
+    const before = await engine.snapshot();
+    const product = before.products[0];
+    // A refusal must not permanently burn the key for everyone else.
+    const refused = await engine.checkout(cart(product.id), sourcingAgent, 'shared-key-0001');
+    expect(refused).toMatchObject({ decision: 'deny', reason: 'AGENT_SCOPE_REQUIRED' });
+    // The owner reusing the very same key is unaffected, and the request is genuinely evaluated.
+    const ownerResult = await engine.checkout(cart(product.id), owner, 'shared-key-0001');
+    expect(ownerResult.decision).toBe('allow');
+    expect(ownerResult).not.toHaveProperty('replayed');
+    // A successful operation still records, so a real replay is still suppressed.
+    const replayed = await engine.checkout(cart(product.id), owner, 'shared-key-0001');
+    expect(replayed).toMatchObject({ decision: 'allow', replayed: true });
+    expect((await engine.snapshot()).orders).toHaveLength(before.orders.length + 1);
+  });
+
   it('separates measured metrics from fabricated telemetry (rule 6)', async () => {
     const engine = await ledger();
     const telemetry = await engine.telemetry();

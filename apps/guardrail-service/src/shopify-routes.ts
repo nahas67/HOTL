@@ -28,13 +28,22 @@ export function registerShopifyRoutes(app: FastifyInstance, engine: GuardrailEng
   }), { webhookSecret: process.env.SHOPIFY_CLIENT_SECRET ?? '', previousWebhookSecret: process.env.SHOPIFY_PREVIOUS_CLIENT_SECRET,
     previousWebhookSecretRevokedAt: process.env.SHOPIFY_PREVIOUS_CLIENT_SECRET_REVOKED_AT,
     previousWebhookSecretValidUntil: process.env.SHOPIFY_PREVIOUS_CLIENT_SECRET_VALID_UNTIL,
-    webhookOrigin: process.env.SHOPIFY_WEBHOOK_ORIGIN }) : undefined);
+    webhookOrigin: process.env.SHOPIFY_WEBHOOK_ORIGIN, encryptionKey: process.env.CONNECTOR_ENCRYPTION_KEY }) : undefined);
   const required = () => { if (!service) throw new GuardrailError('SHOPIFY_NOT_CONFIGURED', 'Shopify app credentials and HTTPS callback must be configured in the guardrail service.', 503); return service; };
   app.get('/api/shopify/webhooks/health', async (_request, reply) => {
     const mode = reconciliationMode();
     if (access.mode !== 'live' || !service || mode === 'DISABLED') return reply.status(503).send({ status: 'not_ready', ingressReady: false, workerReady: false, reconciliationReady: false });
-    return { status: 'ready', ingressReady: true, workerReady: mode === 'DURABLE_BACKGROUND',
-      reconciliationReady: true, reconciliationMode: mode };
+    // Ingress is only ready if the endpoint can actually be built. `webhookUri` requires a
+    // configured public HTTPS origin AND the connector encryption key that binds the callback
+    // to an installation; without them registration would throw while health claimed ready.
+    let ingressReady = false;
+    try { ingressReady = service.ingressReady(); } catch { ingressReady = false; }
+    // Reconciliation only runs automatically in DURABLE_BACKGROUND. In OWNER_MANUAL an operator
+    // drives it, and reporting `reconciliationReady: true` would claim a worker that is not
+    // running. The label the documentation promises is returned alongside.
+    const reconciliationReady = mode === 'DURABLE_BACKGROUND';
+    if (!ingressReady || !reconciliationReady) return reply.status(503).send({ status: 'not_ready', ingressReady, workerReady: mode === 'DURABLE_BACKGROUND', reconciliationReady, reconciliationMode: mode, worker: reconciliationReady ? 'AUTOMATIC' : 'MANUAL_ONLY' });
+    return { status: 'ready', ingressReady: true, workerReady: true, reconciliationReady: true, reconciliationMode: mode, worker: 'AUTOMATIC' };
   });
   app.get('/api/shopify', async request => {
     const actor = await access.owner(request);
@@ -90,8 +99,13 @@ export function registerShopifyRoutes(app: FastifyInstance, engine: GuardrailEng
   app.register(async hooks => {
     hooks.removeContentTypeParser('application/json');
     hooks.addContentTypeParser('application/json', { parseAs: 'buffer', bodyLimit: 2 * 1024 * 1024 }, (_request, body, done) => done(null, body));
-    hooks.post('/api/shopify/webhooks/:id', { bodyLimit: 2 * 1024 * 1024 }, async (request, reply) => {
-      const result = await required().webhook(id(request), request.body as Buffer, header(request, 'x-shopify-hmac-sha256'), header(request, 'x-shopify-webhook-id'), header(request, 'x-shopify-topic'));
+    // The callback URL is installation-BOUND: /:id/:mac. The previous two-segment shape is
+    // removed rather than kept as a fallback, so a hand-assembled URL without the MAC is a
+    // hard 401 rather than silently accepted. The URI comes from the registration response and
+    // is deterministic per installation; it is never assembled by hand.
+    hooks.post('/api/shopify/webhooks/:id/:mac', { bodyLimit: 2 * 1024 * 1024 }, async (request, reply) => {
+      const mac = String((request.params as { mac: string }).mac ?? '');
+      const result = await required().webhook(id(request), mac, request.body as Buffer, header(request, 'x-shopify-hmac-sha256'), header(request, 'x-shopify-webhook-id'), header(request, 'x-shopify-topic'));
       return reply.status(202).send(result);
     });
   });

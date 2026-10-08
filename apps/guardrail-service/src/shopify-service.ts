@@ -3,12 +3,12 @@ import { z } from 'zod';
 import { createConnector, verifyWebhookSignature, normalizeConnectorError, type CommerceConnector, type Page } from '@hotl/connector-sdk';
 import type { Actor } from '@hotl/schemas';
 import { GuardrailError, type GuardrailEngine, type Result } from './engine.js';
-import { assertShopifyInstallation, lookupShopifyInstallation, type ShopifyOAuthService } from './shopify-oauth.js';
+import { assertShopifyInstallation, lookupShopifyInstallation, shopifyWebhookMac, verifyShopifyWebhookMac, type ShopifyOAuthService } from './shopify-oauth.js';
 import { shopifyPricePort, type ShopifyPricePort } from './shopify-provider.js';
 import { managedWebhookTopic, shopifyWebhookPort, type ManagedWebhookTopic, type ShopifyWebhookPort } from './shopify-webhooks.js';
 import { shopifyData, ownVariant, sameObservation, variantId, webhookTopicSchema, shopifySnapshotSchema, type MerchantVariant, type PriceOperation } from './shopify-state.js';
 
-type Options = { webhookSecret: string; previousWebhookSecret?: string; previousWebhookSecretRevokedAt?: string; previousWebhookSecretValidUntil?: string; webhookOrigin?: string; webhookPort?: (shop: string, token: string) => ShopifyWebhookPort;
+type Options = { webhookSecret: string; previousWebhookSecret?: string; previousWebhookSecretRevokedAt?: string; previousWebhookSecretValidUntil?: string; webhookOrigin?: string; encryptionKey?: string; webhookPort?: (shop: string, token: string) => ShopifyWebhookPort;
   connector?: (shop: string, token: string) => CommerceConnector; port?: (shop: string, token: string) => ShopifyPricePort; now?: () => Date };
 const economicsSchema = z.object({ installationId: z.string().uuid(), variantId, expectedRevision: z.number().int().positive(),
   landedCost: z.number().min(0).max(1_000_000).multipleOf(0.01), estimatedCac: z.number().min(0).max(1_000_000).multipleOf(0.01),
@@ -39,12 +39,34 @@ export class ShopifyCommerceService {
   private now() { return this.options.now?.() ?? new Date(); }
   private port(shop: string, token: string) { return this.options.port?.(shop, token) ?? shopifyPricePort(shop, token); }
   private webhookPort(shop: string, token: string) { return this.options.webhookPort?.(shop, token) ?? shopifyWebhookPort(shop, token); }
+  /**
+   * The key that binds a webhook callback URL to one installation: the connector encryption
+   * key, domain-separated per installation. It stops a body validly signed for shop A being
+   * replayed at shop B's endpoint, which the app-wide HMAC alone cannot prevent. Fails closed.
+   */
+  private key(): Buffer {
+    const raw = this.options.encryptionKey;
+    if (!raw) throw new GuardrailError('CONNECTOR_ENCRYPTION_KEY_REQUIRED', 'Configure CONNECTOR_ENCRYPTION_KEY on the guardrail service.', 503);
+    const key = Buffer.from(raw, 'base64');
+    if (key.length !== 32) throw new GuardrailError('CONNECTOR_ENCRYPTION_KEY_INVALID', 'The connector encryption key must decode to 32 bytes.', 503);
+    return key;
+  }
   private webhookUri(installationId: string) {
     if (!this.options.webhookOrigin) throw new GuardrailError('SHOPIFY_WEBHOOK_ORIGIN_REQUIRED', 'Configure a public HTTPS webhook origin on the guardrail service.', 503);
     let origin: URL;
     try { origin = new URL(this.options.webhookOrigin); } catch { throw new GuardrailError('SHOPIFY_WEBHOOK_ORIGIN_INVALID', 'Webhook origin must be a public HTTPS origin.', 503); }
     if (origin.protocol !== 'https:' || origin.username || origin.password || origin.search || origin.hash || origin.pathname !== '/' || origin.hostname === 'localhost' || origin.hostname.endsWith('.localhost') || origin.hostname === '127.0.0.1') throw new GuardrailError('SHOPIFY_WEBHOOK_ORIGIN_INVALID', 'Webhook origin must be a public HTTPS origin.', 503);
-    return `${origin.origin}/api/shopify/webhooks/${installationId}`;
+    // Deterministic: re-registering after a Shopify-side deletion yields the same URI, so an
+    // operator never has to hunt for a new endpoint URL.
+    return `${origin.origin}/api/shopify/webhooks/${installationId}/${shopifyWebhookMac(this.key(), installationId)}`;
+  }
+  /**
+   * Whether a webhook endpoint could actually be built and registered right now. Used by the
+   * health endpoint so it cannot report ingress ready while registration would throw.
+   */
+  ingressReady(): boolean {
+    try { this.webhookUri('00000000-0000-0000-0000-000000000000'); return true; }
+    catch { return false; }
   }
   async overview(actor: Actor) {
     owner(actor); const state = shopifyData(await this.engine.snapshot());
@@ -120,7 +142,12 @@ export class ShopifyCommerceService {
       return { decision: status === 'CONFIRMED' ? 'allow' : 'deny', status, providerId, requestId, errorCode, providerWritePerformed: dispatched };
     });
   }
-  async webhook(installationId: string, rawBody: Buffer, signature: string, deliveryId: string, topic: string) {
+  async webhook(installationId: string, mac: string, rawBody: Buffer, signature: string, deliveryId: string, topic: string) {
+    // Checked FIRST, before HMAC, before any ledger read. The app-wide secret is shared by every
+    // installation, so a body validly signed for one store would otherwise be accepted at
+    // another's endpoint and trigger a provider read against a store it never came from.
+    // A wrong MAC is a hard 401; there is no fallback to the unbound path.
+    if (!verifyShopifyWebhookMac(this.key(), installationId, mac)) throw new GuardrailError('INVALID_WEBHOOK', 'Webhook signature is invalid.', 401);
     const current = verifyWebhookSignature({ provider: 'shopify', rawBody, signature, secret: this.options.webhookSecret });
     const previous = this.options.previousWebhookSecret && Date.parse(this.options.previousWebhookSecretValidUntil ?? '') > this.now().getTime()
       ? verifyWebhookSignature({ provider: 'shopify', rawBody, signature, secret: this.options.previousWebhookSecret }) : false;

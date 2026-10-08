@@ -6,10 +6,13 @@ import { join, resolve, sep } from 'node:path';
 import { createEngine } from '../src/engine.js';
 import { createServer } from '../src/server.js';
 import { shopifyData } from '../src/shopify-state.js';
+import { shopifyWebhookMac } from '../src/shopify-oauth.js';
 import type { EngineState } from '../src/types.js';
 
 const base = '/api/guardrails/v1/shopify';
 const secret = 'http-fixture-shopify-secret-not-real';
+// Must match CONNECTOR_ENCRYPTION_KEY stubbed in fixture() below: the MAC is derived from it.
+const MAC_KEY_BUFFER = Buffer.alloc(32, 7);
 const shop = 'http-fixture.myshopify.com';
 const encryptedFixture = [Buffer.alloc(12, 1).toString('base64'), Buffer.alloc(16, 2).toString('base64'), Buffer.from('{}').toString('base64')].join('.');
 const ownerHeaders = { 'x-hotl-internal-token': 'http-fixture-internal', 'idempotency-key': 'http-fixture-key' };
@@ -233,7 +236,7 @@ describe('Shopify HTTP authorization and delivery boundaries', () => {
     const f = await fixture(), installed = await f.install();
     const body = `{ "id": 123, "title": "café", "description": "${'x'.repeat(140_000)}" }\n`;
     const headers = { 'content-type': 'application/json', 'x-shopify-hmac-sha256': createHmac('sha256', secret).update(body).digest('base64'), 'x-shopify-webhook-id': 'http-delivery-1', 'x-shopify-topic': 'products/update' };
-    const url = `/api/shopify/webhooks/${installed.id}`;
+    const url = `/api/shopify/webhooks/${installed.id}/${shopifyWebhookMac(MAC_KEY_BUFFER, installed.id)}`;
     const changed = await f.app.inject({ method: 'POST', url, headers, payload: JSON.stringify(JSON.parse(body)) });
     expect(changed.statusCode).toBe(401); expect(changed.json().error.code).toBe('INVALID_WEBHOOK');
     expect(shopifyData(await f.engine.snapshot()).inbox).toEqual([]);
@@ -254,7 +257,7 @@ describe('Shopify HTTP authorization and delivery boundaries', () => {
   });
 
   it('rejects a validly signed changed-body replay and oversized webhook before intake', async () => {
-    const f = await fixture(), installed = await f.install(), url = `/api/shopify/webhooks/${installed.id}`;
+    const f = await fixture(), installed = await f.install(), url = `/api/shopify/webhooks/${installed.id}/${shopifyWebhookMac(MAC_KEY_BUFFER, installed.id)}`;
     const deliver = (payload: string) => f.app.inject({ method: 'POST', url, payload, headers: { 'content-type': 'application/json', 'x-shopify-hmac-sha256': createHmac('sha256', secret).update(payload).digest('base64'), 'x-shopify-webhook-id': 'http-fixed-delivery', 'x-shopify-topic': 'products/update' } });
     expect((await deliver('{"id":1}')).statusCode).toBe(202);
     const changed = await deliver('{"id":2}');
@@ -262,5 +265,33 @@ describe('Shopify HTTP authorization and delivery boundaries', () => {
     expect((await deliver(JSON.stringify({ id: 3, padding: 'x'.repeat(2 * 1024 * 1024) }))).statusCode).toBe(413);
     expect(shopifyData(await f.engine.snapshot()).inbox).toHaveLength(1);
     expect(f.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  // The app-wide HMAC is shared by every installation, so a body validly signed for one store
+  // is replayable at another's endpoint. The installation-bound MAC is what closes that.
+  it('refuses a delivery addressed to one installation using another installation MAC', async () => {
+    const f = await fixture(), installed = await f.install();
+    const otherId = randomUUID();
+    const deliver = (payload: string, mac: string, deliveryId: string) => f.app.inject({
+      method: 'POST', url: `/api/shopify/webhooks/${installed.id}/${mac}`, payload,
+      headers: { 'content-type': 'application/json', 'x-shopify-hmac-sha256': createHmac('sha256', secret).update(payload).digest('base64'), 'x-shopify-webhook-id': deliveryId, 'x-shopify-topic': 'products/update' },
+    });
+    // Correct MAC for THIS installation: accepted.
+    expect((await deliver('{"id":4242}', shopifyWebhookMac(MAC_KEY_BUFFER, installed.id), 'own-mac-delivery')).statusCode).toBe(202);
+    const before = shopifyData(await f.engine.snapshot()).inbox.length;
+    const fetches = f.fetch.mock.calls.length;
+    // The body below is CORRECTLY signed, so the app-wide HMAC accepts it. Only the MAC
+    // belongs to a different installation. Without the MAC gate this would be accepted and
+    // would trigger a provider read against a store the payload never came from.
+    const crossed = await deliver('{"id":7777}', shopifyWebhookMac(MAC_KEY_BUFFER, otherId), 'cross-install-delivery');
+    expect(crossed.statusCode).toBe(401);
+    expect(crossed.json().error.code).toBe('INVALID_WEBHOOK');
+    // The unbound two-segment shape is gone, not a fallback.
+    const unbound = await f.app.inject({ method: 'POST', url: `/api/shopify/webhooks/${installed.id}`, payload: '{"id":8888}',
+      headers: { 'content-type': 'application/json', 'x-shopify-hmac-sha256': createHmac('sha256', secret).update('{"id":8888}').digest('base64'), 'x-shopify-webhook-id': 'unbound-delivery', 'x-shopify-topic': 'products/update' } });
+    expect(unbound.statusCode).not.toBe(202);
+    expect(shopifyData(await f.engine.snapshot()).inbox).toHaveLength(before);
+    // No provider read was triggered by either refused delivery.
+    expect(f.fetch.mock.calls.length).toBe(fetches);
   });
 });

@@ -34,7 +34,24 @@ https://<owner-cockpit-host>/api/shopify/oauth/callback
 Use a trusted, public HTTPS origin for the owner cockpit and a trusted public HTTPS origin for the separately hosted guardrail webhook service. The guardrail receives Shopify deliveries under:
 
 ```text
-https://<guardrail-host>/api/shopify/webhooks/<installation-id>
+https://<guardrail-host>/api/shopify/webhooks/<installation-id>/<installation-mac>
+
+The final path segment is an **installation-bound MAC**, derived as
+`base64url(HMAC-SHA256(CONNECTOR_ENCRYPTION_KEY, "hotl-shopify-webhook:v1:" + installation-id))`,
+truncated to 43 URL-safe characters. It exists because the app-wide webhook secret is shared by
+every installation: without it, a body validly signed for one store is accepted at another
+store's endpoint and triggers a provider read against a store the payload never came from.
+
+Two operational consequences:
+
+- The URI is **deterministic per installation**, so re-registering after a Shopify-side deletion
+  produces the same endpoint. An operator never has to hunt for a new URL.
+- A URL assembled by hand, or the older two-segment shape, is **refused with 401**. The endpoint
+  URI always comes from the registration response.
+
+A subscription registered under the previous two-segment shape must be deleted in Shopify before
+HOTL can register the new endpoint; until then `ensureWebhook` reports `SHOPIFY_WEBHOOK_CONFLICT`
+rather than silently creating a second subscription. No live subscription exists today.
 ```
 
 Use an isolated staging deployment with valid TLS and limited routes. Do not expose a local development server or the simulation environment as the staging endpoint.

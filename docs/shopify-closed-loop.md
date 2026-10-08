@@ -89,9 +89,9 @@ and an `Idempotency-Key`. The cockpit proxies only its explicit allowlist.
 | `POST /prices/:id/reconcile` | Read provider state; never resend the mutation. |
 | `POST /prices/:id/investigations` | Append an owner investigation to an unresolved operation; binds to current status and reconciliation time, and never clears the lock. |
 | `POST /worker` | Run a bounded read-worker pass for this owner. |
-| `GET /api/shopify/webhooks/health` | Public non-secret readiness: reports ingress, worker and reconciliation mode separately; simulation reports not ready. |
+| `GET /api/shopify/webhooks/health` | Public non-secret readiness: reports ingress, worker and reconciliation mode separately; simulation reports not ready. `ingressReady` requires a buildable endpoint (public HTTPS origin **and** the connector encryption key). `reconciliationReady` is true only in `DURABLE_BACKGROUND`; in `OWNER_MANUAL` it is false and `worker` reads `MANUAL_ONLY`. |
 | `GET /api/shopify/oauth/callback` | Public signed callback plus browser cookie; outside mutation base. |
-| `POST /api/shopify/webhooks/:id` | Public raw-body HMAC intake, maximum 2 MiB; outside mutation base. |
+| `POST /api/shopify/webhooks/:id/:mac` | Public raw-body HMAC intake, maximum 2 MiB; outside mutation base. The `:mac` segment is installation-bound, derived from `CONNECTOR_ENCRYPTION_KEY`, because the app-wide webhook secret is shared by every installation and would otherwise let a body signed for one store be replayed at another's endpoint. Deterministic per installation; a wrong or absent MAC is 401 and the unbound two-segment shape does not exist. |
 
 Set `SHOPIFY_RECONCILIATION_MODE` explicitly to `DURABLE_BACKGROUND`, `OWNER_MANUAL`
 or `DISABLED`. The five-second worker runs only in `DURABLE_BACKGROUND`;

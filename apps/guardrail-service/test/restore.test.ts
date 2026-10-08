@@ -40,15 +40,21 @@ describe('isolated file-ledger backup and restore', () => {
     const restored = await createEngine({ filePath: files.restored, now, killSwitchReader: async () => ({ engaged: false }) });
     expect(await restored.snapshot()).toEqual(expected);
     expect(await restored.checkout(checkout, owner, 'restore-checkout')).toEqual({ ...order, replayed: true });
-    expect(await restored.checkSpend(spend, owner, 'restore-ceiling-denial')).toEqual({ ...denied, replayed: true });
+    // Replaying a recorded ALLOW reports what happened and adds nothing to the ledger.
     expect(await restored.snapshot()).toEqual(expected);
+    // A pure denial is not stored, so this re-evaluates against the restored ledger instead of
+    // replaying the record written on the source ledger. The source denied DAILY_CEILING_EXCEEDED
+    // before the ledger was paused; the restored ledger is paused, so the current and honest
+    // answer is SYSTEM_PAUSED. Replaying the cached reason would report a stale conclusion.
+    expect((await restored.checkSpend(spend, owner, 'restore-ceiling-denial')).reason).toBe('SYSTEM_PAUSED');
     await expect(restored.checkout(checkout, { type: 'owner', id: 'different-owner' }, 'restore-checkout')).rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' });
     expect((await restored.checkout(checkout, owner, 'restore-fresh-checkout')).reason).toBe('SYSTEM_PAUSED');
     const afterDenial = await restored.snapshot();
     expect(afterDenial.orders).toEqual(expected.orders);
     expect(afterDenial.products).toEqual(expected.products);
     expect(afterDenial.audit.slice(0, expected.audit.length)).toEqual(expected.audit);
-    expect(afterDenial.audit).toHaveLength(expected.audit.length + 1);
+    // Both refusals are audited rather than dropped: the re-evaluated spend and the fresh checkout.
+    expect(afterDenial.audit).toHaveLength(expected.audit.length + 2);
     expect(digest(await readFile(files.source))).toBe(expectedDigest);
     expect(digest(await readFile(files.backup))).toBe(expectedDigest);
   });
@@ -63,7 +69,11 @@ describe('isolated file-ledger backup and restore', () => {
     const expected = await source.snapshot();
     const restored = await createEngine({ filePath: files.restored, now, killSwitchReader: async () => ({ engaged: true }) });
     expect(await restored.snapshot()).toEqual(expected);
-    expect(await restored.publishListing({ productId: 'prod-06' }, owner, 'restore-margin-denial')).toEqual({ ...margin, replayed: true });
+    // The margin denial was produced by the source ledger and is deliberately NOT replayed
+    // from the restored record. This engine is constructed with the emergency plane ENGAGED,
+    // so the honest answer is KILL_SWITCH_ENGAGED. Replaying a cached denial here would report
+    // a stale conclusion while a global stop is active, which is the opposite of the point.
+    expect((await restored.publishListing({ productId: 'prod-06' }, owner, 'restore-margin-denial')).reason).toBe('KILL_SWITCH_ENGAGED');
     expect((await restored.publishListing({ productId: 'prod-01' }, owner, 'restore-killed-listing')).reason).toBe('KILL_SWITCH_ENGAGED');
     expect((await restored.snapshot()).products).toEqual(expected.products);
   });

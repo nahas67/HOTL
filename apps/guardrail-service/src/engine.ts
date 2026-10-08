@@ -191,7 +191,16 @@ export class GuardrailEngine {
     }
     this.verify(state);
     this.audit(state,actor,operation,{request:payload,result,mode:this.mode},this.summary(operation,result));
-    state.idempotency[ledgerKey]={fingerprint,result:structuredClone(result)};
+    // A pure denial changes nothing, so it must not consume the caller's key. Recording it
+    // meant one actor could permanently block that key for every other actor and operation --
+    // including the owner -- with a request that was refused. A replayed denial is simply
+    // re-evaluated, which re-runs the policy and is strictly the more conservative outcome:
+    // it can only deny again or allow if the world genuinely changed. Anything that actually
+    // mutated state still records, so replay protection for real effects is unchanged.
+    // The key FORMAT is untouched: state.idempotency is persisted, so re-keying it would make
+    // earlier records unreachable on upgrade and could execute a replayed financial request
+    // twice.
+    if(result.decision!=='deny')state.idempotency[ledgerKey]={fingerprint,result:structuredClone(result)};
     return result;
   }
   private async transaction(operation:string,payload:unknown,actor:Actor,key:string,action:(state:EngineState)=>Promise<Result>|Result):Promise<Result> {
