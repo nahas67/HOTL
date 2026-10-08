@@ -13,8 +13,18 @@ async function proxy(
     );
   if (request.method === "POST") {
     const origin = request.headers.get("origin");
-    const expected = process.env.STOREFRONT_PUBLIC_ORIGIN ?? `${request.nextUrl.protocol}//${request.headers.get('host') ?? request.nextUrl.host}`;
-    if (origin && origin !== expected)
+    const configured = process.env.STOREFRONT_PUBLIC_ORIGIN;
+    const expected =
+      configured ??
+      `${request.nextUrl.protocol}//${request.headers.get("host") ?? request.nextUrl.host}`;
+    // An absent Origin cannot be validated. Browsers send it on every POST, so its absence
+    // means a stripped header or a non-browser caller, and this proxy has no way to tell a
+    // same-origin request from a cross-site one. It therefore refuses rather than assuming.
+    // When STOREFRONT_PUBLIC_ORIGIN is unset the expectation is derived from the request's
+    // own Host header, which is best-effort only: an intermediary able to rewrite Host can
+    // make any origin match. Pinning the public origin is a staging prerequisite for that
+    // reason. This is a CSRF control, not authentication.
+    if (!origin || origin !== expected)
       return NextResponse.json(
         { error: { message: "Invalid request origin" } },
         { status: 403 },
