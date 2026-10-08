@@ -2,6 +2,7 @@ import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, 
 import { z } from 'zod';
 import type { Actor } from '@hotl/schemas';
 import { GuardrailError, type GuardrailEngine } from './engine.js';
+import { shopifyStateWasUsed } from './shopify-state.js';
 import type { EngineState } from './types.js';
 
 const shopSchema = z.string().regex(/^[a-z0-9][a-z0-9-]{0,61}[a-z0-9]\.myshopify\.com$|^[a-z0-9]\.myshopify\.com$/);
@@ -44,6 +45,31 @@ export function validateShopifyOAuthState(value: unknown): boolean {
     && pending.every(item => installations.some(installation => installation.id === item.installationId && installation.revision >= item.installationRevision));
 }
 export type ShopifyInstallation = Omit<StoredInstallation, 'encryptedTokens' | 'clientId'>;
+
+/**
+ * M1 callback authenticator. Shopify signs only the request BODY with the app client
+ * secret, which is shared by every shop on the app, so a validly signed body captured
+ * from one shop can otherwise be replayed at another shop's endpoint under any topic.
+ * Deriving the callback path from the installation binds a delivery to the installation
+ * it was registered for.
+ *
+ * The derivation is domain-separated from every other use of the connector vault key and
+ * versioned (`:v1`) so the scheme can be rotated without rotating the key. It is
+ * deterministic, so re-registering a subscription after a provider-side deletion yields
+ * the identical URI. This is an authenticator, never a credential: it appears in the
+ * registered callback URL by design and must not be treated as a secret.
+ */
+const WEBHOOK_MAC_DOMAIN = 'hotl-shopify-webhook:v1:';
+const WEBHOOK_MAC_SEGMENT = /^[A-Za-z0-9_-]{43}$/;
+export function shopifyWebhookMac(key: Buffer, installationId: string): string {
+  return createHmac('sha256', key).update(`${WEBHOOK_MAC_DOMAIN}${installationId}`).digest('base64url').slice(0, 43);
+}
+/** Constant-time comparison that also rejects any non-canonical or wrong-length segment. */
+export function verifyShopifyWebhookMac(key: Buffer, installationId: string, presented: unknown): boolean {
+  if (typeof presented !== 'string' || !WEBHOOK_MAC_SEGMENT.test(presented)) return false;
+  const actual = Buffer.from(presented, 'base64url'), expected = Buffer.from(shopifyWebhookMac(key, installationId), 'base64url');
+  return actual.length === expected.length && timingSafeEqual(expected, actual);
+}
 const tokenSchema = z.object({
   access_token: z.string().min(10).max(4096), refresh_token: z.string().min(10).max(4096),
   scope: z.string().min(1).max(4096), expires_in: z.number().int().positive().max(31_536_000),
@@ -59,6 +85,10 @@ const hash = (value: string) => createHash('sha256').update(value).digest('hex')
 function fail(code: string, message: string, status = 409): never { throw new GuardrailError(code, message, status); }
 function owner(actor: Actor) { if (actor.type !== 'owner') fail('OWNER_REQUIRED', 'Shopify installation management requires an owner.', 403); }
 function data(state: EngineState, workspaceId?: string): ShopifyOAuthState {
+  // Missing state must deny, never silently reset. An absent container is only a valid
+  // first initialisation when the audit journal records no prior installation activity.
+  if (state.extensions?.shopifyOAuth === undefined && shopifyStateWasUsed(state, 'installation'))
+    fail('SHOPIFY_STATE_INVALID', 'Shopify installation state is missing although this ledger records earlier Shopify activity. Restore it; it is never recreated.', 503);
   state.extensions ??= {};
   if (state.extensions.shopifyOAuth === undefined) {
     if (!workspaceId) fail('SHOPIFY_INSTALLATION_NOT_FOUND', 'Shopify installation was not found.', 404);

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { Actor } from '@hotl/schemas';
+import { GuardrailError } from './engine.js';
 import type { EngineState } from './types.js';
 
 const uuid = z.string().uuid();
@@ -141,6 +142,27 @@ const legacyCommerceStateSchema = z.object({ version: z.literal(1), variants: z.
   subscriptionAttempts: z.array(webhookSubscriptionAttemptSchema).max(100_000).optional() }).strict();
 export type ShopifyCommerceState = z.infer<typeof commerceStateSchema>;
 
+/**
+ * The hash-chained audit journal is the only Shopify artefact that lives outside the two
+ * extension containers. Rule 2 guarantees every Shopify mutation appends one, so the
+ * journal permanently proves whether this workspace ever used Shopify. Losing a container
+ * can therefore never be silently re-initialised as "never used".
+ *
+ * The two containers are created independently and legitimately in that order: an OAuth
+ * install records installation operations while no commerce container exists yet, so each
+ * domain is matched against its own operation-name prefixes. Matching every
+ * `integration.shopify.` name against both containers would deny the first sync of every
+ * freshly installed workspace.
+ */
+const INSTALLATION_OPERATIONS = ['integration.shopify.oauth.', 'integration.shopify.disconnected', 'shopify.price.'];
+const COMMERCE_OPERATIONS = ['integration.shopify.sync.', 'integration.shopify.webhook.', 'integration.shopify.price.',
+  'integration.shopify.economics.', 'shopify.price.'];
+export function shopifyStateWasUsed(state: EngineState, domain: 'commerce' | 'installation'): boolean {
+  const prefixes = domain === 'commerce' ? COMMERCE_OPERATIONS : INSTALLATION_OPERATIONS;
+  return (state.audit ?? []).some(entry => typeof entry?.eventType === 'string'
+    && prefixes.some(prefix => entry.eventType.startsWith(prefix)));
+}
+
 /** Called for every durable load and before every durable commit; it never repairs or overwrites bad records. */
 export function validateShopifyCommerceState(value: unknown): boolean {
   const current = commerceStateSchema.safeParse(value);
@@ -175,6 +197,10 @@ function migrateLegacyInbox(data: ShopifyCommerceState) {
 }
 
 export function shopifyData(state: EngineState): ShopifyCommerceState {
+  // Missing state must deny, never silently reset. An absent container is only a valid
+  // first initialisation when the audit journal shows this workspace never used Shopify.
+  if (state.extensions?.shopifyCommerce === undefined && shopifyStateWasUsed(state, 'commerce'))
+    throw new GuardrailError('SHOPIFY_STATE_INVALID', 'Shopify commerce state is missing although this ledger records earlier Shopify activity. Restore it; it is never recreated.', 503);
   state.extensions ??= {};
   if (state.extensions.shopifyCommerce === undefined) state.extensions.shopifyCommerce = { version: 1, variants: [], snapshots: [], jobs: [], inbox: [], operations: [] };
   const raw = state.extensions.shopifyCommerce;
