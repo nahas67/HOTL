@@ -23,6 +23,7 @@
 | 2 | **Credential exposure found and contained**: a live GitHub fine-grained PAT was being serialized by the Next.js build into `apps/cockpit/.next/cache/turbopack`. | §0.3 |
 | 3 | Full-history secret scan run for the first time with a real scanner; history is **clean**. | §0.3 |
 | 4 | Fixed the red `main` pipeline and the underlying environment-dependent test. | §0.2 |
+| 4b | Repaired the pipeline again after it advanced: fixed a **timing-dependent readiness gate** in the SQL drill that made CI pass or fail by runner speed. | §0.2.1 |
 | 5 | Three public ZIP snapshots untracked; `*.zip` ignored; a safe archive builder added. | §0.4 |
 | 6 | CI now fails on credential leaks, tracked binary snapshots, committed `.env`, and allowance drift. | §0.5 |
 | 7 | Entire release-validation suite plus both PostgreSQL drills **re-run and passing** on this machine. | §0.1 |
@@ -44,6 +45,7 @@ Harness: `scripts/verify-suite.ps1`; raw logs in `artifacts/verify-2026-10-08/` 
 | Build | `pnpm build` | **PASS** (exit 0) |
 | Browser drill | `pnpm test:e2e` | **PASS** — **11/11 passed** (1.2 min) |
 | Migration + RLS drill | `pwsh -File infra/scripts/test-database.ps1` | **PASS** — migration, owner isolation, write denial, audit immutability, refund escrow, kill latch, concurrent spend |
+| Migration + RLS drill (Linux/Docker, CI path) | `bash infra/scripts/test-database.sh` | **PASS** — exit 0, including concurrent-spend denial |
 | Runtime-ledger drill | `pwsh -File infra/scripts/test-runtime-ledger.ps1` | **PASS** — 33/33 tests, restart, backup/restore, restored authorization |
 
 These are **local** results. They do not satisfy any hosted or provider requirement.
@@ -71,6 +73,45 @@ Error: strict mode violation: getByRole('alert') resolved to 2 elements:
 `tests/e2e/operating-system.spec.ts:80` now targets the HOTL validation notice explicitly (`filter({ hasText: 'Request validation failed.' })`). Verified: **11/11 e2e pass locally with the fix**, including a full re-run after every other change in this session.
 
 This matches the fix already proposed in open [PR #2](https://github.com/nahas67/HOTL/pull/2) (run [`37776234045`](https://github.com/nahas67/HOTL/actions/runs/37776234045), green). PR #2 remained **open and unmerged** at the time of writing. Merging to `main` is left to the owner — see §7.
+
+**Confirmed on CI:** run [`37821434285`](https://github.com/nahas67/HOTL/actions/runs/37821434285) on this branch passes step 11, "Exercise the local simulation in the browser". The e2e repair works on the runner, not only locally.
+
+### 0.2.1 A second timing-dependent defect, found by the repaired pipeline
+
+With the browser step fixed, CI progressed past it and failed at the **next** step, which this session had not touched:
+
+```text
+Validate production migration and RLS on local Postgres
+psql: error: connection to server on socket "/var/run/postgresql/.s.PGSQL.5432" failed:
+FATAL:  database "hotl" does not exist
+```
+
+`infra/scripts/test-database.sh` starts `postgres:16-alpine` with `POSTGRES_DB=hotl`, then waits on `pg_isready` before running the migration. **`pg_isready` reports "accepting connections" while the image is still running its initialization step, before `POSTGRES_DB` is created.** The gate therefore opened before the database existed, so the drill's result depended on runner speed: a slow machine got past it, a fast one failed.
+
+This is a **pre-existing bug, not script logic and not a regression** from this branch — the identical sequence reproduces cleanly locally, and PR #2's run passed the same step on an unchanged base hours earlier. It is the *same class of defect* as the e2e selector: a check that is correct on one machine and wrong on another because it verifies a proxy signal rather than the property it exists to prove. A drill whose pass/fail depends on runner timing is not evidence, which is why it matters under this project's evidence rules.
+
+Fixed in `8a45928`: the gate now opens a real `psql` connection over loopback to the exact database the drill uses, and the retry loop is raised 30 s → 60 s. `infra/scripts/test-runtime-ledger.sh` already applied this rule — *"TCP readiness avoids the image's temporary initialization-only socket"* — so this script was the one that was missed.
+
+Verified end to end under bash against Docker: **exit 0**, including the concurrent-spend denial where one reservation is allowed and the second is refused with `DAILY_CEILING_EXCEEDED`.
+
+### 0.2.2 Result — first fully green pipeline on this repository
+
+Run [`37822359219`](https://github.com/nahas67/HOTL/actions/runs/37822359219), branch `codex/checkpoint-reconciliation-2026-10-08` @ `8a45928`: **all steps successful**.
+
+```text
+pnpm lint ............................................... success
+pnpm typecheck .......................................... success
+pnpm test ............................................... success
+pnpm build .............................................. success
+Exercise the local simulation in the browser ............. success
+Validate production migration and RLS on local Postgres .. success
+Validate runtime ledger and guardrail engine ............. success
+Scan git history and working tree for credentials ........ success   (new)
+```
+
+This is materially better than any previous run on this repository. Run `37753604085` failed at the browser step and **skipped both PostgreSQL drills**, so until now the migration/RLS and runtime-ledger evidence has never actually run in CI on a green build. It now does, and the credential scan runs on every push and pull request.
+
+**`main` is still red until this branch is merged** — the default branch has not been changed by this session.
 
 ### 0.3 Credential review — first real result (NEW)
 
