@@ -1,6 +1,6 @@
 # HOTL Project Current State and Prompt-Engineer Handoff
 
-**Snapshot date:** 2026-10-03
+**Snapshot date:** 2026-10-08
 **Repository:** `C:\Users\nahas\OneDrive\Desktop\HOTL`  
 **Purpose:** Give a prompt engineer and technical reviewer a detailed, loss-resistant picture of what this project is, what is implemented, what evidence exists, what remains, and which constraints must remain in force.
 
@@ -63,7 +63,7 @@ These are the product target areas, **not** a claim that each is implemented. Th
 | Component | Source location | Local address / role | Current status |
 | --- | --- | --- | --- |
 | Owner cockpit | `apps/cockpit` | `127.0.0.1:3000`; Next.js operator UI and validated same-origin proxy | Implemented for local control and review; not hosted production UI |
-| Private Sites owner snapshot | `sites/hotl-owner-console` | [HOTL Owner Control](https://hotl-owner-control.jesttest8.chatgpt.site); static Sites surface | Deployed privately; checkpoint only, no live HOTL API, telemetry, approval, or mutation connection. See [`docs/chatgpt-sites-deployment.md`](docs/chatgpt-sites-deployment.md). |
+| Private Sites owner presentation | `sites/hotl-owner-console` | [HOTL Owner Control](https://hotl-owner-control.jesttest8.chatgpt.site); static interactive Sites surface | Demo mode contains invented illustrative commerce fixtures; checkpoint mode shows separately recorded repository facts and `Unknown` for live feeds. No HOTL API, telemetry, approval, or mutation connection. See [`docs/chatgpt-sites-deployment.md`](docs/chatgpt-sites-deployment.md). |
 | Customer storefront | `apps/storefront` | `127.0.0.1:3001`; local catalog/cart/demo checkout | Simulation only; not a live storefront/payment service |
 | Guardrail service | `apps/guardrail-service` | `127.0.0.1:4100`; authenticated deterministic policy, state, audit and provider boundary | Core local implementation; provider write credentials are intended to stay here |
 | Independent kill service | `infra/kill-switch` | `127.0.0.1:4200`; separate durable irreversible stop latch and revocation hooks | Local isolated implementation/drills; no deployed independent service or verified real revocation |
@@ -247,7 +247,7 @@ Suggested reviewer output: requirement-to-status traceability matrix; factual co
 
 ---
 
-**Snapshot caveat:** Historical sections and addenda retain their own dates. This snapshot is dated 2026-10-03. The private Sites surface added on this date contains only a static checkpoint; it is not a hosted HOTL backend, live cockpit, staging integration, or production commerce capability. A file, migration, test, mock receipt, or UI deployment is not proof of an external provider action or operating commerce system.
+**Snapshot caveat:** Historical sections and addenda retain their own dates. This snapshot is dated 2026-10-08. The private Sites surface presents illustrative UI fixtures and recorded checkpoint facts; it is not a hosted HOTL backend, live cockpit, staging integration, or production commerce capability. A file, migration, test, mock receipt, or UI deployment is not proof of an external provider action or operating commerce system.
 
 **September 24 source-control addendum:** Initial local source commit `f83938ff51a0f5531998ed11380d55863f55ad2f` and annotated tag `hotl-baseline-2026-09-24` now exist. The preserved [locked program plan](docs/locked-program-plan.md), [maturity register](docs/program-maturity-register.md), [Gate A worksheet](docs/pilot-business-risk-envelope.md), and [Gate B1 evidence](evidence/gate-b1-source-control/README.md) govern the next review. No real provider or hosted evidence was added by this source-control step.
 
@@ -257,6 +257,6 @@ Suggested reviewer output: requirement-to-status traceability matrix; factual co
 
 **2026-09-28 real Gate C evidence attempt:** The latest [evidence package](evidence/gate-c-shopify-external-2026-09-28/README.md) records the current blocked attempt and the exact sanitized [static preflight](evidence/gate-c-shopify-external-2026-09-28/PREFLIGHT.json). The 19 required staging fields remain missing. No active probe or Shopify request occurred, and no M4 promotion was made. Gate A remains unapproved because AI recommendations are not legal/business evidence or cockpit owner approval. Gate C remains blocked until the owner-authorized business envelope and isolated staging prerequisites, Shopify development store/app, and trusted HTTPS endpoints exist. The residual read→write race remains.
 
-## 14. ChatGPT Sites hosting checkpoint — 2026-10-03
+## 14. ChatGPT Sites owner UI checkpoint — 2026-10-08
 
-The private [HOTL Owner Control Site](https://hotl-owner-control.jesttest8.chatgpt.site) is a separate static presentation of the repository checkpoint. Its only data is the reviewed, non-live status text committed in `sites/hotl-owner-console`; its CSP disables network connections, it has no HOTL credentials or environment values, and it cannot invoke an API. Site access was verified for one account user, with no groups, editors, or external viewers. This deployment does not promote the production-hosting maturity row and does not change Gate A, Gate B, Gate C, or any commerce capability. Read the [Sites capability matrix, cost/limits, security, rollback, and evidence](docs/chatgpt-sites-deployment.md) and the [sanitized deployment evidence](evidence/chatgpt-sites-deployment-2026-10-03/README.md).
+The private [HOTL Owner Control Site](https://hotl-owner-control.jesttest8.chatgpt.site) now has 19 navigable routes across 16 primary workspace views and Gate A/B/C detail. The primary views cover dashboard, agents, approvals, products, orders, inventory, customers, suppliers, marketing, finance, integrations, autonomy, guardrails, activity, readiness, and Settings. Demo mode uses clearly labeled fictitious records and sample economics; checkpoint mode displays only reviewed repository facts and leaves live business measures unknown. The UI is a static browser application with `connect-src 'none'`, no HOTL/provider credentials, no backend connection, and no mutation actions. Access remains owner-private. This design update does not promote a maturity level or change Gate A, Gate B, Gate C, or commerce capability. Manual browser checks covered navigation, sample filtering/detail, checkpoint switching, desktop and narrow layouts; the Site package built and JavaScript syntax checks passed. See [`docs/chatgpt-sites-deployment.md`](docs/chatgpt-sites-deployment.md) and the [dated UI evidence](evidence/hotl-owner-ui-2026-10-08/README.md).

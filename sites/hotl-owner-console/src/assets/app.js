@@ -1,223 +1,163 @@
-import { checkpoint, navigation } from "./checkpoint.js";
+import { groups, pages, gates, checkpoint, normalizeRoute, searchWorkspace, report } from './data.js';
+import { esc, icon, button, badge, list, link } from './ui.js';
+import { renderView, detailView } from './views.js';
 
-const root = document.querySelector("#section-content");
-const navButtons = [...document.querySelectorAll("[data-section]")];
-const breadcrumb = document.querySelector("#breadcrumb-current");
-const themeToggle = document.querySelector("#theme-toggle");
-
-function node(tag, className, text) {
-  const result = document.createElement(tag);
-  if (className) result.className = className;
-  if (text !== undefined) result.textContent = text;
-  return result;
+const preferenceKey = 'hotl-owner-ui-preferences-v2';
+let saved = {};
+try { saved = JSON.parse(localStorage.getItem(preferenceKey) || '{}') || {}; } catch { /* Preferences may be unavailable in private browsing. */ }
+const state = {
+  route: normalizeRoute(location.hash), mode: saved.mode === 'checkpoint' ? 'checkpoint' : 'demo',
+  theme: saved.theme === 'dark' ? 'dark' : 'light', density: saved.density === 'compact' ? 'compact' : 'comfortable',
+  days: 30, chart: 'revenue', query: '', filter: 'All',
+};
+const main = document.querySelector('#main-content');
+const searchDialog = document.querySelector('#search-dialog');
+const detailDialog = document.querySelector('#detail-dialog');
+const mobileDialog = document.querySelector('#mobile-dialog');
+let toastTimer;
+function savePreferences() {
+  try { localStorage.setItem(preferenceKey, JSON.stringify({ theme: state.theme, density: state.density, mode: state.mode })); } catch { /* Keep preferences in memory when storage is unavailable. */ }
 }
-
-function badge(text, tone = "amber") {
-  const result = node("span", `badge badge-${tone}`, text);
-  return result;
+function announce(message) { document.querySelector('#announcement').textContent = message; }
+function toast(message) {
+  const element = document.querySelector('#toast');
+  clearTimeout(toastTimer); element.textContent = message; element.hidden = false;
+  toastTimer = setTimeout(() => { element.hidden = true; }, 3500);
 }
-
-function factList(facts) {
-  const list = node("ul", "fact-list");
-  for (const fact of facts) {
-    const item = node("li", "fact-item");
-    item.append(node("span", "fact-mark", "—"), node("span", "", fact));
-    list.append(item);
+function renderNav() {
+  const selected = state.route.startsWith('gate-') ? 'readiness' : state.route;
+  const html = groups.map(([group, rows]) => `<div class="nav-group"><p>${esc(group)}</p>${rows.map(([id, label, symbol]) => `<a href="#${id}" class="nav-item ${selected === id ? 'selected' : ''}" ${selected === id ? 'aria-current="page"' : ''}>${icon(symbol)}<span>${esc(label)}</span>${id === 'approvals' && state.mode === 'demo' ? '<span class="nav-count" aria-label="3 sample requests">3</span>' : ''}</a>`).join('')}</div>`).join('');
+  document.querySelector('#desktop-nav').innerHTML = html;
+  document.querySelector('#mobile-nav').innerHTML = html;
+}
+function shell() {
+  document.documentElement.dataset.theme = state.theme;
+  document.documentElement.dataset.density = state.density;
+  const label = pages.find(p => p.id === state.route)?.label || gates.find(g => g.id === state.route)?.label || 'Dashboard';
+  document.title = `${label} · HOTL`;
+  document.querySelector('#breadcrumb').textContent = label;
+  document.querySelector('#private-label').innerHTML = `${icon('lock')}Private workspace`;
+  document.querySelector('#mobile-menu').innerHTML = icon('menu');
+  document.querySelector('#open-search').innerHTML = `${icon('search')}<span>Search workspace</span><kbd>Ctrl K</kbd>`;
+  document.querySelector('#notifications').innerHTML = icon('bell') + '<span class="notification-dot"></span>';
+  const toggle = document.querySelector('#theme-toggle');
+  toggle.innerHTML = icon(state.theme === 'light' ? 'sun' : 'moon');
+  toggle.setAttribute('aria-label', `Switch to ${state.theme === 'light' ? 'dark' : 'light'} theme`);
+  const demo = state.mode === 'demo';
+  document.querySelector('#mode-banner').innerHTML = `<div class="mode-description">${icon('info')}<p><strong>${demo ? 'DEMO WORKSPACE' : 'RECORDED CHECKPOINT'}</strong><span>${demo ? 'Sample data only. No commerce actions.' : `Recorded ${checkpoint.reviewedOn}. No live data or actions.`}</span></p></div><div class="mode-switch" aria-label="Data view">${button('mode-demo', 'Demo', demo ? 'active' : '', `aria-pressed="${demo}"`)}${button('mode-checkpoint', 'Checkpoint', !demo ? 'active' : '', `aria-pressed="${!demo}"`)}</div>`;
+  document.querySelector('#footer-mode').textContent = demo ? 'Design preview · Data is illustrative' : `Repository checkpoint · ${checkpoint.reviewedOn}`;
+  document.querySelectorAll('[data-action="close-dialog"]').forEach(el => { el.innerHTML = icon('close'); });
+  renderNav();
+}
+function render(preserveFocus = false) {
+  const active = document.activeElement;
+  const input = preserveFocus && active?.dataset.input;
+  const selection = input === 'query' ? active.selectionStart : null;
+  main.innerHTML = renderView(state);
+  shell();
+  if (input) {
+    const replacement = main.querySelector(`[data-input="${input}"]`);
+    replacement?.focus({ preventScroll: true });
+    if (selection !== null) replacement?.setSelectionRange(selection, selection);
   }
-  return list;
 }
-
-function pageHeading(eyebrow, title, intro) {
-  const heading = node("div", "page-heading");
-  heading.append(node("div", "eyebrow", eyebrow), node("h1", "", title), node("p", "page-intro", intro));
-  return heading;
+function closeDialogs() { [searchDialog, detailDialog, mobileDialog].forEach(d => { if (d.open) d.close(); }); }
+function navigate(route, detail) {
+  closeDialogs();
+  const normalized = normalizeRoute(route);
+  if (state.route !== normalized) {
+    location.hash = normalized;
+    // Detail is opened by the hash handler after the matching page is rendered.
+    pendingDetail = detail || null;
+  } else if (detail) openDetail(detail);
 }
-
-function statCard(label, value, note, tone = "neutral", mark = "—") {
-  const card = node("article", `stat-card stat-${tone}`);
-  const top = node("div", "stat-top");
-  top.append(node("span", "stat-label", label), node("span", "stat-mark", mark));
-  card.append(top, node("div", "stat-value", value), node("div", "stat-note", note));
-  return card;
+let pendingDetail = null;
+function openDetail(id) {
+  const detail = detailView(id, state.mode);
+  if (!detail) return;
+  document.querySelector('#detail-title').textContent = detail.title;
+  document.querySelector('#detail-subtitle').textContent = detail.subtitle;
+  document.querySelector('#detail-body').innerHTML = detail.content;
+  if (!detailDialog.open) detailDialog.showModal();
 }
-
-function panel(title, subtitle, content, extraClass = "") {
-  const section = node("section", `panel ${extraClass}`.trim());
-  const header = node("div", "panel-header");
-  header.append(node("h2", "panel-title", title));
-  if (subtitle) header.append(node("p", "panel-subtitle", subtitle));
-  section.append(header, content);
-  return section;
+function renderSearch() {
+  const query = document.querySelector('#global-search').value;
+  const rows = searchWorkspace(query, state.mode);
+  document.querySelector('#search-results').innerHTML = rows.length ? rows.map(r => `<button type="button" class="search-result" data-action="search-result" data-route="${r.route}" ${r.detail ? `data-id="${r.detail}"` : ''}>${icon(r.icon)}<span><strong>${esc(r.title)}</strong><span>${esc(r.subtitle)}</span></span>${icon('chevron')}</button>`).join('') : '<div class="search-empty">No results. Try a page name, product, or order number.</div>';
 }
-
-function factPanel(title, subtitle, facts, tone = "neutral") {
-  const body = node("div", "panel-body");
-  body.append(badge(tone === "red" ? "BLOCKED" : tone === "amber" ? "NOT CONNECTED" : "REPOSITORY FACT", tone), factList(facts));
-  return panel(title, subtitle, body);
+function openSearch() {
+  closeDialogs();
+  document.querySelector('#global-search').value = '';
+  document.querySelector('#global-search').placeholder = state.mode === 'demo' ? 'Search pages, products, or orders' : 'Search workspace pages';
+  renderSearch(); searchDialog.showModal(); document.querySelector('#global-search').focus();
 }
+function setMode(mode) {
+  state.mode = mode === 'checkpoint' ? 'checkpoint' : 'demo';
+  state.query = ''; state.filter = 'All'; closeDialogs(); savePreferences(); render();
+  announce(state.mode === 'demo' ? 'Demo view. All business data is illustrative.' : 'Recorded checkpoint view. Live metrics are unknown.');
+}
+function exportReport() {
+  const data = report(state.mode, state.route, state.days);
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a'); anchor.href = url;
+  anchor.download = `HOTL-${state.mode === 'demo' ? 'SAMPLE' : 'CHECKPOINT'}-${state.route}.json`;
+  document.body.append(anchor); anchor.click(); anchor.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  toast(state.mode === 'demo' ? 'Sample report exported. It contains no real business records.' : 'Recorded checkpoint exported. It contains no live telemetry.');
+}
+function showNotices() {
+  closeDialogs();
+  document.querySelector('#detail-title').textContent = 'Launch readiness notices';
+  document.querySelector('#detail-subtitle').textContent = `Recorded checkpoint · ${checkpoint.reviewedOn}`;
+  document.querySelector('#detail-body').innerHTML = `<p class="detail-intro">These are recorded setup requirements, not live notifications.</p>${gates.map(g => `<section class="notice-item">${badge(g.status)}<h3>${esc(g.name)}</h3><p>${esc(g.description)}</p>${link(g.id, 'Review requirements', 'text-button')}</section>`).join('')}`;
+  detailDialog.showModal();
+}
+window.addEventListener('hashchange', () => {
+  if (location.hash === '#main-content') return;
+  state.route = normalizeRoute(location.hash); state.query = ''; state.filter = 'All';
+  closeDialogs(); render(); window.scrollTo({ top: 0 });
+  main.querySelector('h1')?.focus({ preventScroll: true });
+  if (pendingDetail) { const detail = pendingDetail; pendingDetail = null; openDetail(detail); }
+});
 
-function renderOverview() {
-  const section = checkpoint.sections.overview;
-  root.append(pageHeading(section.eyebrow, section.title, section.intro));
-
-  const metrics = node("div", "metric-grid");
-  metrics.append(
-    statCard("BUSINESS MODE", "Simulation", "Default local mode; not a live environment probe", "amber", "S"),
-    statCard("GATE A", "Owner input", "Risk envelope remains unapproved", "amber", "A"),
-    statCard("GATE C", "Blocked", "19 staging settings missing; store not set up", "red", "C"),
-    statCard("LIVE ACTIONS", "Disabled", "No spend, supplier, payment, or provider writes", "neutral", "×"),
-  );
-  root.append(metrics);
-
-  const columns = node("div", "overview-columns");
-  const priorities = node("div", "priority-list");
-  const items = [
-    { number: "01", tone: "amber", title: "Approve the business envelope", text: "AI may recommend a pilot. Country, product, economics, capital, reserve, exposure caps, refund limits, and stop rules still require owner approval." },
-    { number: "02", tone: "red", title: "Provision isolated Shopify staging", text: "The development store, app, trusted HTTPS callback and webhook URLs, and staging services are not set up. No external probes ran." },
-    { number: "03", tone: "blue", title: "Connect status only after identity review", text: "A future hosted cockpit needs a narrow, authenticated read API with freshness and tenant binding. It must not proxy general backend requests." },
-  ];
-  for (const item of items) {
-    const row = node("article", "priority-row");
-    row.append(node("span", `priority-number priority-${item.tone}`, item.number));
-    const text = node("div", "priority-copy");
-    text.append(node("h3", "", item.title), node("p", "", item.text));
-    row.append(text, node("span", "priority-chevron", "›"));
-    priorities.append(row);
+document.addEventListener('click', event => {
+  const target = event.target.closest('[data-action]');
+  if (!target) {
+    if (event.target.closest('a[href^="#"]') && event.target.closest('dialog')) closeDialogs();
+    return;
   }
-  columns.append(panel("Owner attention", "The next unresolved decisions and prerequisites", priorities));
-
-  const right = node("div", "overview-right");
-  const health = node("div", "health-card");
-  health.append(node("div", "health-kicker", "SERVICE HEALTH"), node("div", "health-value", "Unknown"), node("p", "health-copy", "The Site does not poll HOTL services. Unknown means no telemetry was received—not that a service is healthy or down."));
-  const signal = node("div", "health-signal");
-  signal.append(node("span", "status-led led-neutral"), node("span", "", "No live signal"));
-  health.append(signal);
-  right.append(health);
-
-  const architecture = node("div", "architecture-card");
-  architecture.append(node("div", "health-kicker", "BOUNDARY CHECK"));
-  const flow = node("div", "boundary-flow");
-  for (const [index, label] of ["Private Site", "HOTL auth", "Guardrail", "Provider"].entries()) {
-    const step = node("div", `flow-step ${index === 2 ? "flow-authority" : ""}`);
-    step.append(node("span", "flow-index", `0${index + 1}`), node("span", "flow-label", label));
-    flow.append(step);
-    if (index < 3) flow.append(node("span", "flow-connector", "· · ·"));
-  }
-  architecture.append(flow, node("p", "architecture-note", "Only the deterministic guardrail authorizes consequential mutations. This Site stops before the first step."));
-  right.append(architecture);
-  columns.append(right);
-  root.append(columns);
-
-  const sectionStrip = node("div", "gate-strip");
-  sectionStrip.append(
-    compactGate("GATE A", checkpoint.gateA.status, "Risk envelope · owner decision", "amber"),
-    compactGate("GATE C", checkpoint.gateC.status, "Shopify staging · prerequisites missing", "red"),
-  );
-  root.append(sectionStrip);
-}
-
-function compactGate(kicker, status, summary, tone) {
-  const card = node("article", `compact-gate compact-${tone}`);
-  const heading = node("div", "compact-gate-head");
-  heading.append(node("span", "gate-kicker", kicker), badge(status, tone));
-  card.append(heading, node("p", "", summary));
-  return card;
-}
-
-function renderSimple(id) {
-  const section = checkpoint.sections[id];
-  root.append(pageHeading("OWNER CONTROL / READ ONLY", section.title, section.body));
-  const width = node("div", "detail-grid");
-  const detail = node("div", "detail-main");
-  detail.append(factPanel("Recorded state", "Repository evidence only · no live request made", section.facts));
-  width.append(detail);
-  const note = node("aside", "detail-aside");
-  note.append(node("div", "aside-icon", "i"), node("h2", "", "What this means"), node("p", "", "This screen does not read a connected service. Treat every current count and health value as unknown until a protected, authenticated source is attached and its timestamp is visible."), badge("SNAPSHOT · 03 OCT 2026", "blue"));
-  width.append(note);
-  root.append(width);
-}
-
-function renderGateA() {
-  const gate = checkpoint.gateA;
-  root.append(pageHeading("READINESS GATE / A", "The business envelope is not approved.", gate.summary));
-  const top = node("div", "gate-status-card gate-status-amber");
-  top.append(node("span", "status-led led-amber"), node("div", "", gate.status), badge("NO SPENDING AUTHORITY", "red"));
-  root.append(top);
-  const columns = node("div", "gate-detail-columns");
-  const unknowns = node("div", "unknown-list");
-  for (const item of gate.unknowns) {
-    const row = node("div", "unknown-row");
-    row.append(node("span", "unknown-icon", "?"), node("span", "", item), badge("UNKNOWN", "amber"));
-    unknowns.append(row);
-  }
-  columns.append(panel("Still requires owner authority", "AI research is a recommendation, not approval", unknowns));
-  const aside = node("aside", "callout-card");
-  aside.append(node("div", "callout-kicker", "SAFE NEXT STEP"), node("h2", "", "Review the AI recommendation"), node("p", "", "The dated research recommendation can help select a candidate, but it does not establish legal suitability, supplier truth, verified economics, capital, risk ceilings, or owner consent."), node("p", "callout-foot", "Record and approve the final envelope in the authenticated HOTL cockpit."));
-  columns.append(aside);
-  root.append(columns);
-}
-
-function renderGateC() {
-  const gate = checkpoint.gateC;
-  root.append(pageHeading("READINESS GATE / C", "Shopify staging is not set up.", gate.summary));
-  const stats = node("div", "metric-grid gate-metrics");
-  stats.append(
-    statCard("PREFLIGHT", "Blocked", `${gate.missingConfiguration} required settings are missing`, "red", "!"),
-    statCard("DEVELOPMENT STORE", "Not set up", "No authorized test merchant", "amber", "S"),
-    statCard("PUBLIC HTTPS", "Unavailable", "No trusted OAuth/webhook endpoints", "amber", "↗"),
-    statCard("EXTERNAL PROOF", "Not run", "No active probe or Shopify request", "neutral", "—"),
-  );
-  root.append(stats);
-  const checks = node("div", "check-list");
-  for (const check of gate.checks) {
-    const row = node("div", "check-row");
-    const icon = node("span", "check-icon", check.includes("blocked") || check.includes("not set up") || check.includes("unavailable") ? "×" : "—");
-    icon.setAttribute("aria-hidden", "true");
-    row.append(icon, node("span", "", check));
-    checks.append(row);
-  }
-  root.append(panel("Staging evidence checklist", "Local implementation is not proof of a provider interaction", checks));
-  const stop = node("div", "stop-note");
-  stop.append(node("span", "stop-mark", "!"), node("p", "", "No live Shopify OAuth, webhook registration, token rotation, product mutation, supplier order, advertising spend, or payment action is enabled by this deployment."));
-  root.append(stop);
-}
-
-function render(id) {
-  const nav = navigation.find((item) => item.id === id) ?? navigation[0];
-  breadcrumb.textContent = nav.label;
-  root.replaceChildren();
-  if (id === "overview") renderOverview();
-  else if (id === "gate-a") renderGateA();
-  else if (id === "gate-c") renderGateC();
-  else renderSimple(id);
-  for (const button of navButtons) {
-    const active = button.dataset.section === id;
-    button.classList.toggle("is-active", active);
-    if (active) button.setAttribute("aria-current", "page");
-    else button.removeAttribute("aria-current");
-  }
-  document.title = `HOTL · ${nav.label}`;
-  document.querySelector("#main-content").focus({ preventScroll: true });
-}
-
-for (const button of navButtons) {
-  button.addEventListener("click", () => render(button.dataset.section));
-}
-
-function setTheme(theme) {
-  document.documentElement.dataset.theme = theme;
-  themeToggle.setAttribute("aria-label", `Switch to ${theme === "light" ? "dark" : "light"} theme`);
-  themeToggle.querySelector("span").textContent = theme === "light" ? "◑" : "◐";
-  try { localStorage.setItem("hotl-sites-theme", theme); } catch { /* Theme remains usable without browser storage. */ }
-}
-
-let initialTheme = "dark";
-try {
-  const savedTheme = localStorage.getItem("hotl-sites-theme");
-  if (savedTheme === "light" || savedTheme === "dark") initialTheme = savedTheme;
-  else if (window.matchMedia("(prefers-color-scheme: light)").matches) initialTheme = "light";
-} catch { /* Use the dark operator theme when browser storage is unavailable. */ }
-setTheme(initialTheme);
-themeToggle.addEventListener("click", () => setTheme(document.documentElement.dataset.theme === "light" ? "dark" : "light"));
-
-render("overview");
+  const action = target.dataset.action;
+  if (action === 'theme') { state.theme = state.theme === 'light' ? 'dark' : 'light'; savePreferences(); shell(); if (state.route === 'settings') render(); }
+  else if (action === 'mode-demo') setMode('demo');
+  else if (action === 'mode-checkpoint') setMode('checkpoint');
+  else if (action === 'search') openSearch();
+  else if (action === 'close-dialog') target.closest('dialog').close();
+  else if (action === 'menu') { closeDialogs(); mobileDialog.showModal(); }
+  else if (action === 'detail') openDetail(target.dataset.id);
+  else if (action === 'search-result') navigate(target.dataset.route, target.dataset.id);
+  else if (action === 'chart') { state.chart = target.dataset.kind === 'orders' ? 'orders' : 'revenue'; render(); main.querySelector(`[data-kind="${state.chart}"]`)?.focus({ preventScroll: true }); }
+  else if (action === 'clear-filters') { state.query = ''; state.filter = 'All'; render(); main.querySelector('[data-input="query"]')?.focus(); }
+  else if (action === 'export') exportReport();
+  else if (action === 'notices') showNotices();
+  else if (action === 'reset-preferences') { state.theme = 'light'; state.density = 'comfortable'; setMode('demo'); toast('Display preferences reset in this browser.'); }
+});
+document.addEventListener('input', event => {
+  if (event.target.id === 'global-search') renderSearch();
+  if (event.target.dataset.input === 'query') { state.query = event.target.value; render(true); }
+});
+document.addEventListener('change', event => {
+  const key = event.target.dataset.input, value = event.target.value;
+  if (key === 'mode') { setMode(value); return; }
+  if (key === 'filter') state.filter = value;
+  else if (key === 'period') state.days = [7, 14, 30].includes(Number(value)) ? Number(value) : 30;
+  else if (key === 'theme') state.theme = value === 'dark' ? 'dark' : 'light';
+  else if (key === 'density') state.density = value === 'compact' ? 'compact' : 'comfortable';
+  else return;
+  savePreferences(); render(true);
+});
+document.addEventListener('keydown', event => {
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); openSearch(); }
+});
+[searchDialog, detailDialog, mobileDialog].forEach(dialog => dialog.addEventListener('click', event => { if (event.target === dialog) dialog.close(); }));
+render();

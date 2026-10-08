@@ -1,84 +1,41 @@
 <!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="color-scheme" content="dark light" />
-    <meta name="robots" content="noindex, nofollow, noarchive" />
-    <meta
-      http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
-    />
-    <meta name="description" content="Private, read-only HOTL owner control surface. Snapshot only; no live commerce connection." />
-    <title>HOTL · Owner Control</title>
-    <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml" />
-    <link rel="stylesheet" href="/assets/styles.css" />
-    <script type="module" src="/assets/app.js"></script>
-  </head>
-  <body>
-    <a class="skip-link" href="#main-content">Skip to content</a>
-    <div class="app-shell">
-      <aside class="sidebar" aria-label="HOTL navigation">
-        <div class="brand-lockup">
-          <div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></div>
-          <div>
-            <div class="brand-name">HOTL</div>
-            <div class="brand-caption">OWNER CONTROL</div>
-          </div>
-        </div>
-
-        <div class="nav-label">WORKSPACE</div>
-        <nav id="primary-navigation" class="primary-navigation" aria-label="Workspace">
-          <button class="nav-item is-active" type="button" data-section="overview" aria-current="page"><span class="nav-symbol">◫</span><span>Overview</span><span class="nav-count">01</span></button>
-          <button class="nav-item" type="button" data-section="agents"><span class="nav-symbol">✳</span><span>Agents</span></button>
-          <button class="nav-item" type="button" data-section="approvals"><span class="nav-symbol">◷</span><span>Approvals</span><span class="nav-alert" aria-label="Not connected">!</span></button>
-          <button class="nav-item" type="button" data-section="products"><span class="nav-symbol">◇</span><span>Products</span></button>
-          <button class="nav-item" type="button" data-section="orders"><span class="nav-symbol">▤</span><span>Orders</span></button>
-          <button class="nav-item" type="button" data-section="finance"><span class="nav-symbol">$</span><span>Finance</span></button>
-          <button class="nav-item" type="button" data-section="integrations"><span class="nav-symbol">⌘</span><span>Integrations</span><span class="nav-alert" aria-label="Blocked">!</span></button>
-          <button class="nav-item" type="button" data-section="autonomy"><span class="nav-symbol">◈</span><span>Autonomy</span></button>
-          <button class="nav-item" type="button" data-section="guardrails"><span class="nav-symbol">⛨</span><span>Guardrails</span></button>
-          <button class="nav-item" type="button" data-section="activity"><span class="nav-symbol">≋</span><span>Activity</span></button>
-        </nav>
-
-        <div class="nav-label gate-label">READINESS GATES</div>
-        <nav class="primary-navigation" aria-label="Readiness gates">
-          <button class="nav-item gate-link" type="button" data-section="gate-a"><span class="gate-dot dot-amber"></span><span>Gate A · Business</span></button>
-          <button class="nav-item gate-link" type="button" data-section="gate-c"><span class="gate-dot dot-red"></span><span>Gate C · Shopify</span></button>
-        </nav>
-
-        <div class="sidebar-bottom">
-          <div class="sidebar-rule"></div>
-          <div class="sidebar-status"><span class="status-led led-amber"></span><span>Snapshot mode</span></div>
-          <div class="sidebar-small">No backend connection<br />No commerce actions</div>
-          <div class="owner-chip"><div class="owner-avatar">H</div><div><div class="owner-name">Workspace owner</div><div class="owner-role">PRIVATE SITE</div></div><span class="owner-chevron">···</span></div>
-        </div>
-      </aside>
-
-      <div class="workspace">
-        <header class="topbar">
-          <div class="breadcrumbs"><span>HOTL</span><span class="crumb-sep">/</span><strong id="breadcrumb-current">Overview</strong></div>
-          <div class="topbar-actions">
-            <span class="environment-pill"><span class="status-led led-amber"></span>SIMULATION</span>
-            <span class="snapshot-pill"><span class="snapshot-icon">▧</span>STATIC SNAPSHOT</span>
-            <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Switch to light theme" title="Change appearance"><span aria-hidden="true">◐</span><span class="theme-label">Theme</span></button>
-            <button class="help-button" type="button" aria-label="About this snapshot" data-section="guardrails">?</button>
-          </div>
-        </header>
-
-        <main id="main-content" class="main-content" tabindex="-1">
-          <div class="snapshot-banner" role="note">
-            <span class="banner-icon" aria-hidden="true">!</span>
-            <p><strong>This page is a read-only checkpoint.</strong> It has no connection to the HOTL services and cannot show live health, approve work, pause commerce, or change a provider.</p>
-            <span class="banner-date">REVIEWED&nbsp; 03 OCT 2026</span>
-          </div>
-          <section id="section-content" aria-live="polite" aria-atomic="true"></section>
-          <footer class="page-footer">
-            <span>HOTL · Human on the Loop Commerce</span>
-            <span>PRIVATE SURFACE <i></i> NO LIVE BUSINESS DATA</span>
-          </footer>
-        </main>
-      </div>
+<html lang="en" data-theme="light" data-density="comfortable">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="robots" content="noindex, nofollow, noarchive">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'">
+  <meta name="description" content="HOTL owner workspace: an interactive design preview with sample commerce data and a separate recorded project checkpoint. No live commerce connection.">
+  <title>Dashboard · HOTL</title>
+  <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/assets/styles.css">
+  <script type="module" src="/assets/app.js"></script>
+</head>
+<body>
+  <a class="skip-link" href="#main-content">Skip to content</a>
+  <aside class="sidebar" aria-label="Workspace sidebar">
+    <a class="brand" href="#dashboard" aria-label="HOTL dashboard"><strong>HOTL</strong><span>Commerce OS</span></a>
+    <nav id="desktop-nav" class="navigation" aria-label="Main navigation"></nav>
+    <div class="sidebar-bottom"><p id="private-label"></p><a href="#settings" class="owner-profile"><span class="owner-avatar">H</span><span>Workspace owner</span></a></div>
+  </aside>
+  <div class="workspace">
+    <header class="topbar">
+      <button id="mobile-menu" type="button" class="icon-button mobile-only" data-action="menu" aria-label="Open navigation"></button>
+      <div class="breadcrumbs"><span>Workspace</span><span>/</span><strong id="breadcrumb">Dashboard</strong></div>
+      <div class="topbar-actions"><button type="button" id="open-search" class="search-trigger" data-action="search" aria-label="Search workspace"></button><button type="button" id="theme-toggle" class="icon-button" data-action="theme" aria-label="Switch to dark theme"></button><button type="button" id="notifications" class="icon-button" data-action="notices" aria-label="View launch readiness notices"></button></div>
+    </header>
+    <div class="content-wrap">
+      <div id="mode-banner" class="mode-banner" role="note"></div>
+      <main id="main-content" tabindex="-1"></main>
+      <footer class="page-footer"><span>HOTL · Human on the Loop Commerce</span><span id="footer-mode"></span></footer>
     </div>
-  </body>
+  </div>
+  <dialog id="search-dialog" class="search-dialog" aria-labelledby="search-title"><div class="dialog-inner"><div class="dialog-head"><h2 id="search-title">Search workspace</h2><button type="button" class="icon-button" data-action="close-dialog" aria-label="Close search"></button></div><label class="search-dialog-input"><span class="sr-only">Find a page or sample record</span><input id="global-search" type="search" placeholder="Search pages, products, or orders" autocomplete="off"></label><div id="search-results"></div><div class="search-footer">Tab to move through results · Enter to open · Esc to close</div></div></dialog>
+  <dialog id="detail-dialog" class="detail-dialog" aria-labelledby="detail-title"><div class="dialog-inner"><div class="dialog-head"><div><p id="detail-subtitle"></p><h2 id="detail-title"></h2></div><button type="button" class="icon-button" data-action="close-dialog" aria-label="Close details"></button></div><div id="detail-body"></div></div></dialog>
+  <dialog id="mobile-dialog" class="mobile-dialog" aria-labelledby="mobile-title"><div class="dialog-inner"><div class="dialog-head"><h2 id="mobile-title">HOTL workspace</h2><button type="button" class="icon-button" data-action="close-dialog" aria-label="Close navigation"></button></div><nav id="mobile-nav" class="navigation" aria-label="Mobile navigation"></nav></div></dialog>
+  <div id="announcement" class="sr-only" role="status" aria-live="polite"></div>
+  <div id="toast" class="toast" role="status" hidden></div>
+  <noscript><p class="notice">JavaScript is required for the interactive preview. No business services are connected.</p></noscript>
+</body>
 </html>

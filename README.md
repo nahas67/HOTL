@@ -11,7 +11,7 @@ and [current evidence](docs/continuation-verification.md).
 
 The owner-supplied [locked program plan](docs/locked-program-plan.md) sets the next evidence gates. [Gate A's pilot business and risk worksheet](docs/pilot-business-risk-envelope.md) records unknown owner inputs without treating them as approved policy.
 
-The private [HOTL Owner Control Site](https://hotl-owner-control.jesttest8.chatgpt.site) is a static, read-only checkpoint dated 2026-10-03. It has no HOTL backend connection and does not expose live health or actions. Review its [Sites compatibility matrix and deployment boundaries](docs/chatgpt-sites-deployment.md) before treating it as an operating cockpit.
+The private [HOTL Owner Control Site](https://hotl-owner-control.jesttest8.chatgpt.site) is an interactive, read-only owner presentation with an explicitly labeled illustrative demo and a separate recorded checkpoint view. It has no HOTL backend connection and does not expose live health or actions. Review its [Sites compatibility matrix and deployment boundaries](docs/chatgpt-sites-deployment.md) and [2026-10-08 UI evidence](evidence/hotl-owner-ui-2026-10-08/README.md) before treating it as an operating cockpit.
 The AI's dated [pilot market and product recommendation](docs/pilot-ai-recommendation-2026-09-28.md) is a validation-only research choice; it does not authorize spending or set owner risk limits.
 The [Gate A–C owner actions guide](docs/gate-a-c-owner-next-actions.md) lists the business decisions and isolated Shopify staging prerequisites needed to resume the external proof.
 The [next working plan](next-gates-a-c-working-plan.md) orders the remaining Gate A–C research, owner inputs, staging setup, external drills and evidence freeze.
