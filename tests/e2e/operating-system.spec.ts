@@ -77,7 +77,11 @@ test('connection setup rejects an unsafe host and never invents connection healt
   await page.getByLabel('Shop domain').fill('127.0.0.1');
   await page.getByLabel('Admin API access token').fill('invalid-browser-drill-token');
   await page.getByRole('button', { name: 'Save credentials' }).click();
-  await expect(page.getByRole('alert')).toBeVisible();
+  // The cockpit renders its own alert, and Next.js adds a transient route announcer with
+  // role="alert". A bare getByRole('alert') therefore resolves to two elements on a slow
+  // runner and one locally. Target the HOTL validation notice so the assertion is
+  // environment-independent instead of timing-dependent.
+  await expect(page.getByRole('alert').filter({ hasText: 'Request validation failed.' })).toBeVisible();
   const data = await (await request.get('http://127.0.0.1:4100/api/integrations', { headers })).json();
   expect(data.connections).toHaveLength(0);
   expect(await page.evaluate(() => JSON.stringify(localStorage))).not.toContain('invalid-browser-drill-token');
