@@ -23,3 +23,7 @@ desktop.ini
 *.key
 *.sqlite
 *.sqlite3
+# Binary snapshot archives must never be tracked. They embedded .git history and
+# .data simulation state when committed. Build clean ones with
+# scripts/build-share-archive.ps1, which excludes ignored state by construction.
+*.zip
