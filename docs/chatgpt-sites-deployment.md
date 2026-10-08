@@ -92,7 +92,7 @@ For an update, edit the tracked Site source; run `node scripts/build.mjs`; synch
 | --- | --- |
 | Static build | Passed for the updated UI: `node scripts/build.mjs`. |
 | JavaScript syntax | Passed: `node --check` for app, data, UI, and view modules. |
-| Site tests | Not run for this UI update; version 1 test results below are historical and do not validate the new UI. |
+| Site tests | Not run for this UI update; the version 1 test record in [`evidence/chatgpt-sites-deployment-2026-10-03/README.md`](../evidence/chatgpt-sites-deployment-2026-10-03/README.md) does not validate version 2. |
 | Local HTTP preview | Passed: updated build rendered at `127.0.0.1:4174`; manual browser checks covered demo/checkpoint switching, mobile navigation, product catalog, and the full route list. Desktop viewport measured 1536×1024 with no vertical overflow; 390px mobile had no horizontal overflow; no browser page errors were observed. Screenshots are in the dated evidence package. |
 | Site deployment | See the dated evidence package for the exact updated version, source SHA, and terminal deployment result. |
 | Site audience | Before the update, `get_site` verified owner role, `custom` access, one allowed account, zero groups, editors, and external visitors. Owner-private deployment is enforced without changing access. |
