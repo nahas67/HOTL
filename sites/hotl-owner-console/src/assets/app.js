@@ -44,7 +44,7 @@ function shell() {
   toggle.innerHTML = icon(state.theme === 'light' ? 'sun' : 'moon');
   toggle.setAttribute('aria-label', `Switch to ${state.theme === 'light' ? 'dark' : 'light'} theme`);
   const demo = state.mode === 'demo';
-  document.querySelector('#mode-banner').innerHTML = `<div class="mode-description">${icon('info')}<p><strong>${demo ? 'DEMO WORKSPACE' : 'RECORDED CHECKPOINT'}</strong><span>${demo ? 'Sample data only. No commerce actions.' : `Recorded ${checkpoint.reviewedOn}. No live data or actions.`}</span></p></div><div class="mode-switch" aria-label="Data view">${button('mode-demo', 'Demo', demo ? 'active' : '', `aria-pressed="${demo}"`)}${button('mode-checkpoint', 'Checkpoint', !demo ? 'active' : '', `aria-pressed="${!demo}"`)}</div>`;
+  document.querySelector('#mode-banner').innerHTML = `<div class="mode-description">${icon('info')}<p><strong>WORKSPACE</strong><span>${demo ? 'Sample data only. No commerce actions.' : `Recorded ${checkpoint.reviewedOn}. No live data or actions.`}</span></p></div><div class="mode-switch" aria-label="Data view">${button('mode-demo', 'Demo', demo ? 'active' : '', `aria-pressed="${demo}"`)}${button('mode-checkpoint', 'Checkpoint', !demo ? 'active' : '', `aria-pressed="${!demo}"`)}</div>`;
   document.querySelector('#footer-mode').textContent = demo ? 'Design preview · Data is illustrative' : `Repository checkpoint · ${checkpoint.reviewedOn}`;
   document.querySelectorAll('[data-action="close-dialog"]').forEach(el => { el.innerHTML = icon('close'); });
   renderNav();
