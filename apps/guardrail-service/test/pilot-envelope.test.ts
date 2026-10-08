@@ -80,7 +80,7 @@ describe('pilot business and risk envelope', () => {
     const approval = await engine.approvePilot({ expectedVersion: 2, reason }, owner, 'approve');
     expect(approval).toMatchObject({ decision: 'allow', constitution: { version: 3, pilot: { approval: { approvedBy: owner.id, constitutionVersion: 3 } } } });
     const restarted = await createEngine({ filePath, seed: false });
-    expect(await restarted.approvePilot({ expectedVersion: 2, reason }, owner, 'approve')).toEqual(approval);
+    expect(await restarted.approvePilot({ expectedVersion: 2, reason }, owner, 'approve')).toEqual({ ...approval, replayed: true });
     await expect(restarted.approvePilot({ expectedVersion: 2, reason: 'Conflicting owner replay' }, owner, 'approve')).rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' });
     const changed = await restarted.updateConstitution({ expectedVersion: 3, reason: 'Owner changes the price change limit', maxPriceChangePct: 10 }, owner, 'policy-change');
     expect(changed).toMatchObject({ decision: 'allow', constitution: { version: 4 } });

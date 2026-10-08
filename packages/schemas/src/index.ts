@@ -149,6 +149,10 @@ export const checkoutSchema = z
       })
       .strict(),
     destinationCountry: z.string().regex(/^[A-Z]{2}$/).optional(),
+    // Optional here so owner and storefront callers stay unchanged; an AGENT caller must
+    // supply it, because the engine binds every consequential mutation to the Constitution
+    // version it was planned against.
+    expectedConstitutionVersion: z.number().int().positive().optional(),
   })
   .strict();
 export const commerceEventSchema = z
@@ -161,6 +165,8 @@ export const commerceEventSchema = z
     ]),
     orderId: z.string().min(1),
     tracking: z.string().max(150).optional(),
+    expectedConstitutionVersion: z.number().int().positive().optional(),
+    expectedRevision: z.number().int().positive().optional(),
   })
   .strict();
 export const runEventSchema = z

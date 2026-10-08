@@ -111,7 +111,7 @@ describe('guarded Shopify staging price execution', () => {
     expect(await f.service.execute(String(proposal.operationId), actor)).toMatchObject({ decision: 'allow', status: 'CONFIRMED', receipt: { environment: 'staging', requestId: 'fixture-write', after: { price: '110.00' } } });
     await f.service.execute(String(proposal.operationId), actor);
     const restart = await createEngine(f.options);
-    expect(await restart.prepareShopifyPrice(f.input, actor, 'proposal')).toEqual(proposal);
+    expect(await restart.prepareShopifyPrice(f.input, actor, 'proposal')).toEqual({ ...proposal, replayed: true });
     expect(f.port.write).toHaveBeenCalledTimes(1);
     const state = await restart.snapshot();
     expect(shopifyData(state).variants[0]).toMatchObject({ revision: 2, price: '110.00' });
@@ -190,7 +190,7 @@ describe('guarded Shopify staging price execution', () => {
     const saved = await f.engine.recordShopifyPriceInvestigation(id, input, actor, 'review');
     expect(saved).toMatchObject({ decision: 'allow', status: 'UNKNOWN', lockRetained: true, verifiedProviderEvidence: false });
     const restarted = await createEngine(f.options);
-    expect(await restarted.recordShopifyPriceInvestigation(id, input, actor, 'review')).toEqual(saved);
+    expect(await restarted.recordShopifyPriceInvestigation(id, input, actor, 'review')).toEqual({ ...saved, replayed: true });
     const state = await restarted.snapshot(), reviewed = shopifyData(state).operations[0];
     expect(reviewed.status).toBe('UNKNOWN');
     expect(reviewed.investigations).toHaveLength(1);
@@ -305,7 +305,7 @@ describe('guarded Shopify staging price execution', () => {
     const cancelled = await f.engine.cancelShopifyPrice(id, body, actor, 'cancel');
     expect(cancelled).toMatchObject({ decision: 'allow', operationId: id, status: 'CANCELLED' });
     const restartedEngine = await createEngine(f.options);
-    expect(await restartedEngine.cancelShopifyPrice(id, body, actor, 'cancel')).toEqual(cancelled);
+    expect(await restartedEngine.cancelShopifyPrice(id, body, actor, 'cancel')).toEqual({ ...cancelled, replayed: true });
     const restored = await restartedEngine.snapshot();
     expect(shopifyData(restored).operations[0]).toMatchObject({ status: 'CANCELLED', cancellation: { reason: body.reason, at: f.now.toISOString(), actorId: actor.id } });
     expect(restored.audit.filter(event => event.eventType === 'shopify.price.cancelled')).toHaveLength(1);

@@ -30,7 +30,7 @@ describe('deterministic guardrails and atomic ledger',()=>{
     const reservationId=results.find(item=>item.decision==='allow')!.reservationId;
     const commit=await engine.commitSpend({reservationId},marketing,'commit');
     expect(commit.status).toBe('committed');
-    expect(await engine.commitSpend({reservationId},marketing,'commit')).toEqual(commit);
+    expect(await engine.commitSpend({reservationId},marketing,'commit')).toEqual({ ...commit, replayed: true });
     expect((await engine.commitSpend({reservationId},marketing,'commit-again')).status).toBe('already_committed');
     expect((await engine.telemetry()).metrics.adSpend).toBe(100);
     expect((await engine.snapshot()).reservations.filter(item=>item.status==='committed')).toHaveLength(1);
@@ -42,7 +42,7 @@ describe('deterministic guardrails and atomic ledger',()=>{
     await expect(engine.checkSpend(spend(20),marketing,'same')).rejects.toMatchObject({code:'IDEMPOTENCY_CONFLICT'});
     expect((await engine.checkSpend(spend(10),support,'spoof')).reason).toBe('ACTOR_MISMATCH');
     const result=await engine.checkSpend(spend(1),marketing,'__proto__');
-    expect(await engine.checkSpend(spend(1),marketing,'__proto__')).toEqual(result);
+    expect(await engine.checkSpend(spend(1),marketing,'__proto__')).toEqual({ ...result, replayed: true });
   });
   it('uses cents without fractional input or negative amount bypasses',async()=>{
     const engine=await createEngine({seed:false});
@@ -81,7 +81,7 @@ describe('deterministic guardrails and atomic ledger',()=>{
     await expect(engine.resolveInterrupt('int-refund-1029',{decision:'modify',modifiedPayload:{orderId:'ORD-1033'}},owner,'swap')).rejects.toMatchObject({code:'ORDER_IMMUTABLE'});
     const result=await engine.resolveInterrupt('int-refund-1029',{decision:'approve',note:'Verified damage'},owner,'approve');
     expect(result.status).toBe('resolved');
-    expect(await engine.resolveInterrupt('int-refund-1029',{decision:'approve',note:'Verified damage'},owner,'approve')).toEqual(result);
+    expect(await engine.resolveInterrupt('int-refund-1029',{decision:'approve',note:'Verified damage'},owner,'approve')).toEqual({ ...result, replayed: true });
     expect((await engine.resolveInterrupt('int-refund-1029',{decision:'approve'},owner,'twice')).reason).toBe('INTERRUPT_ALREADY_RESOLVED');
     expect((await engine.snapshot()).orders.find(item=>item.id==='ORD-1029')?.refunded).toBe(42);
     expect((await engine.evaluateRefund({orderId:'ORD-1029',amount:8,currency:'USD',reasonCode:'damaged'},support,'over-refund')).reason).toBe('REFUND_EXCEEDS_ORDER_BALANCE');
@@ -112,7 +112,7 @@ describe('deterministic guardrails and atomic ledger',()=>{
     const engine=await createEngine({filePath,seed:false});
     const result=await engine.checkSpend(spend(20),marketing,'persistent-key');
     const restarted=await createEngine({filePath,seed:false});
-    expect(await restarted.checkSpend(spend(20),marketing,'persistent-key')).toEqual(result);
+    expect(await restarted.checkSpend(spend(20),marketing,'persistent-key')).toEqual({ ...result, replayed: true });
     expect((await restarted.snapshot()).audit.map(item=>item.eventType)).toEqual(['simulation.initialized','workspace.file-initialized','constitution.update','spend.check']);
     const saved=JSON.parse(await readFile(filePath,'utf8'));saved.audit[0].payload.mode='tampered';await writeFile(filePath,JSON.stringify(saved));
     await expect(createEngine({filePath})).rejects.toMatchObject({code:'AUDIT_INTEGRITY_FAILED'});
@@ -152,7 +152,7 @@ describe('deterministic guardrails and atomic ledger',()=>{
     const cart={items:[{productId:'prod-02',quantity:1},{productId:'prod-02',quantity:2}],customer:{name:'Test Customer',email:'test@example.com'}};
     const result=await engine.checkout(cart,owner,'cart');
     const order=result.order as {id:string;total:number;items:unknown[]};expect(order.total).toBe(102);expect(order.items).toHaveLength(1);
-    expect(await engine.checkout(cart,owner,'cart')).toEqual(result);
+    expect(await engine.checkout(cart,owner,'cart')).toEqual({ ...result, replayed: true });
     expect((await engine.snapshot()).products.find(item=>item.id==='prod-02')?.inventory).toBe(243);
     await expect(engine.checkout({...cart,total:1},owner,'price-tamper')).rejects.toBeDefined();
     const payload={productId:'prod-02',orderId:order.id,quantity:3};
@@ -171,7 +171,7 @@ describe('deterministic guardrails and atomic ledger',()=>{
     const placed=await engine.checkout(cart,owner,'immutable-checkout');
     const order=placed.order as {id:string;status:string};
     await engine.placeSupplierOrder({productId:'prod-02',orderId:order.id,quantity:1},owner,'immutable-supplier');
-    expect(await engine.checkout(cart,owner,'immutable-checkout')).toEqual(placed);
+    expect(await engine.checkout(cart,owner,'immutable-checkout')).toEqual({ ...placed, replayed: true });
     const state=await engine.snapshot();expect(state.orders.find(item=>item.id===order.id)?.status).toBe('shipped');
     const historic=state.audit.find(item=>item.eventType==='commerce.checkout')!.payload.result as {order:{status:string}};
     expect(historic.order.status).toBe('processing');

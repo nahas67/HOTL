@@ -163,11 +163,19 @@ export class GuardrailEngine {
   }
   private async applyTransaction(state:EngineState,operation:string,payload:unknown,actor:Actor,key:string,action:(state:EngineState)=>Promise<Result>|Result) {
     const fingerprint=digest({operation,payload,actor,mode:this.mode});
+    // The persisted key format is deliberately unchanged. `state.idempotency` is part of the
+    // durable ledger, so re-keying it (for example to bind the record per actor and operation)
+    // would make every record written by an earlier version unreachable on upgrade, and a
+    // replayed financial request would then execute a second time. Cross-actor key squatting
+    // is an availability annoyance; losing replay protection is a safety failure.
     const ledgerKey=`id:${key}`;
     const existing=Object.hasOwn(state.idempotency,ledgerKey)?state.idempotency[ledgerKey]:undefined;
     if(existing) {
       if(existing.fingerprint!==fingerprint)throw new GuardrailError('IDEMPOTENCY_CONFLICT','This key was already used with a different actor or request.',409);
-      return structuredClone(existing.result);
+      // A replayed allow is the recorded result of an earlier decision, never fresh authority:
+      // the action is not re-run and the stop conditions are not re-evaluated here. Returning it
+      // indistinguishably from a fresh allow invited callers to treat history as permission.
+      return {...structuredClone(existing.result),replayed:true};
     }
     // Snapshot before the action so an unexpected fault can be denied without committing
     // whatever half of the mutation had already been applied.
@@ -425,7 +433,11 @@ export class GuardrailEngine {
         receipt.outcome=after.variantId===before.variantId&&after.productId===before.productId&&after.currency===before.currency&&after.price===operation.input.price?'CONFIRMED':'DRIFT';
       } catch(error) {
         // Even HTTP errors/timeouts can hide a completed provider action. Never infer nonexecution.
-        receipt.errorCode=error instanceof Error&&'code' in error?String(error.code).replace(/[^A-Z_]/g,'').slice(0,80):'PROVIDER_OUTCOME_UNKNOWN';
+        // Digits are preserved because the receipt schema allows them and a provider code like
+        // HTTP_500 must not be recorded as HTTP_. The fallback guarantees a non-empty code: an
+        // empty one would fail the receipt schema and abort the post-write commit, losing the
+        // record of a provider write that already happened.
+        receipt.errorCode=error instanceof Error&&'code' in error?(String(error.code).replace(/[^A-Z0-9_]/g,'').slice(0,80)||'PROVIDER_OUTCOME_UNKNOWN'):'PROVIDER_OUTCOME_UNKNOWN';
       }
       receipt.completedAt=this.now().toISOString();operation.receipt=receipt;operation.status=receipt.outcome;delete operation.claim;
       if(receipt.outcome==='CONFIRMED'&&receipt.after) {
@@ -484,7 +496,7 @@ export class GuardrailEngine {
   }
   private scope(operation:string,actor:Actor):Result|null {
     if(actor.type!=='agent')return null;
-    const allowed:Record<string,string[]>={sourcing_agent:['listing.publish'],marketing_agent:['spend.check','spend.commit','campaign.launch','campaign.pause'],support_agent:['refunds.evaluate'],order_agent:['supplier.order']};
+    const allowed:Record<string,string[]>={sourcing_agent:['listing.publish'],marketing_agent:['spend.check','spend.commit','campaign.launch','campaign.pause'],support_agent:['refunds.evaluate'],order_agent:['supplier.order','commerce.checkout','commerce.event']};
     return allowed[actor.id]?.includes(operation)?null:deny('AGENT_SCOPE_REQUIRED');
   }
   private context(state:EngineState,input:Result,actor:Actor,operation:string):Result|null {
@@ -812,6 +824,11 @@ export class GuardrailEngine {
     const input=checkoutSchema.parse(raw);
     return this.transaction('commerce.checkout',input,actor,key,async state=>{
       const blocked=await this.block(state);if(blocked)return blocked;
+      // Commerce mutations go through the same scope and Constitution-version gates as every
+      // other consequential action. Without this they inherited no engine-level authorization
+      // at all, and only the HTTP route's access check stood between an agent and an order.
+      const scopeIssue=this.scope('commerce.checkout',actor);if(scopeIssue)return scopeIssue;
+      const contextIssue=this.context(state,input,actor,'commerce.checkout');if(contextIssue)return contextIssue;
       const c=this.constitution(state);
       if(c.permittedCountries.length||c.prohibitedCountries.length){if(!input.destinationCountry)return deny('DESTINATION_COUNTRY_REQUIRED');if(c.prohibitedCountries.includes(input.destinationCountry)||c.permittedCountries.length&&!c.permittedCountries.includes(input.destinationCountry))return deny('COUNTRY_NOT_PERMITTED');}
       const quantities=new Map<string,number>();for(const line of input.items)quantities.set(line.productId,(quantities.get(line.productId)??0)+line.quantity);
@@ -840,6 +857,8 @@ export class GuardrailEngine {
     const input=commerceEventSchema.parse(raw);
     return this.transaction('commerce.event',input,actor,key,async state=>{
       const blocked=await this.block(state);if(blocked)return blocked;
+      const scopeIssue=this.scope('commerce.event',actor);if(scopeIssue)return scopeIssue;
+      const contextIssue=this.context(state,input,actor,'commerce.event');if(contextIssue)return contextIssue;
       const order=state.orders.find(item=>item.id===input.orderId);if(!order)return deny('ORDER_NOT_FOUND');
       if(state.commerceEvents.includes(input.eventId)) {
         const previous=state.audit.find(entry=>entry.eventType==='commerce.event'&&(entry.payload.request as {eventId?:string}|undefined)?.eventId===input.eventId);
@@ -885,7 +904,14 @@ export class GuardrailEngine {
     const chart=weights.map((weight,index)=>{const date=new Date(this.now().getTime()-(13-index)*86400000);return {date:DAY(date),label:date.toLocaleDateString('en-US',{month:'short',day:'numeric',timeZone:'UTC'}),revenue:Math.round(1840*weight),spend:Math.round(67*weight)};});
     const activeRun=state.runs?.some(run=>run.status==='running'&&this.now().getTime()-new Date(String(run.updatedAt)).getTime()<120_000);
     const agents=state.agents.map(item=>({...item,status:status!=='running'?'paused':item.status==='working'&&!activeRun?'idle':item.status,currentTask:item.status==='working'&&!activeRun?'No currently active run':item.currentTask}));
-    return {mode:this.mode,status,paused:state.paused,pauseReason:state.pauseReason,killSwitch:{...kill,reachable:killReachable},metrics:{revenue:state.baseRevenue,revenueChange:18.6,orders:state.baseOrders,ordersChange:12.4,margin:0.462,marginChange:0.024,adSpend:spend,adSpendCeiling:state.config.dailyAdSpendCeiling,activeAgents:agents.filter(item=>item.status==='working').length,pendingInterrupts:state.interrupts.filter(item=>item.status==='pending').length},chart,agents,products:state.products,orders:state.orders,activity:state.audit.slice(-30).reverse(),config:state.config,constitution:state.constitution,interrupts:state.interrupts,updatedAt:this.now().toISOString()};
+    return {mode:this.mode,status,paused:state.paused,pauseReason:state.pauseReason,killSwitch:{...kill,reachable:killReachable},
+      // `metrics` holds only values derived from the persisted ledger. Anything fabricated is
+      // reported under `synthetic` with its own label, because rule 6 forbids presenting sample
+      // telemetry as production evidence and a consumer must be able to tell them apart.
+      metrics:{revenue:state.baseRevenue,orders:state.baseOrders,adSpend:spend,adSpendCeiling:state.config.dailyAdSpendCeiling,activeAgents:agents.filter(item=>item.status==='working').length,pendingInterrupts:state.interrupts.filter(item=>item.status==='pending').length},
+      synthetic:{revenueChange:18.6,ordersChange:12.4,margin:0.462,marginChange:0.024,chart,
+        note:'Illustrative values for the local simulation. They are not observed commerce data and must not be presented as production evidence.'},
+      agents,products:state.products,orders:state.orders,activity:state.audit.slice(-30).reverse(),config:state.config,constitution:state.constitution,interrupts:state.interrupts,updatedAt:this.now().toISOString()};
   }
 }
 export async function createEngine(options:EngineOptions={}) {return new GuardrailEngine(options).initialize();}

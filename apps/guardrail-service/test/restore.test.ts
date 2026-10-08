@@ -39,8 +39,8 @@ describe('isolated file-ledger backup and restore', () => {
     expect(digest(await readFile(files.restored))).toBe(expectedDigest);
     const restored = await createEngine({ filePath: files.restored, now, killSwitchReader: async () => ({ engaged: false }) });
     expect(await restored.snapshot()).toEqual(expected);
-    expect(await restored.checkout(checkout, owner, 'restore-checkout')).toEqual(order);
-    expect(await restored.checkSpend(spend, owner, 'restore-ceiling-denial')).toEqual(denied);
+    expect(await restored.checkout(checkout, owner, 'restore-checkout')).toEqual({ ...order, replayed: true });
+    expect(await restored.checkSpend(spend, owner, 'restore-ceiling-denial')).toEqual({ ...denied, replayed: true });
     expect(await restored.snapshot()).toEqual(expected);
     await expect(restored.checkout(checkout, { type: 'owner', id: 'different-owner' }, 'restore-checkout')).rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' });
     expect((await restored.checkout(checkout, owner, 'restore-fresh-checkout')).reason).toBe('SYSTEM_PAUSED');
@@ -63,7 +63,7 @@ describe('isolated file-ledger backup and restore', () => {
     const expected = await source.snapshot();
     const restored = await createEngine({ filePath: files.restored, now, killSwitchReader: async () => ({ engaged: true }) });
     expect(await restored.snapshot()).toEqual(expected);
-    expect(await restored.publishListing({ productId: 'prod-06' }, owner, 'restore-margin-denial')).toEqual(margin);
+    expect(await restored.publishListing({ productId: 'prod-06' }, owner, 'restore-margin-denial')).toEqual({ ...margin, replayed: true });
     expect((await restored.publishListing({ productId: 'prod-01' }, owner, 'restore-killed-listing')).reason).toBe('KILL_SWITCH_ENGAGED');
     expect((await restored.snapshot()).products).toEqual(expected.products);
   });

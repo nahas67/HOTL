@@ -197,7 +197,7 @@ describe('durable Shopify OAuth and credential lifecycle', () => {
     await expect(f.service.invalidate(installation.id, owner, 1, 'stale')).rejects.toMatchObject({ code: 'SHOPIFY_INSTALLATION_CHANGED' });
     const result = await f.service.invalidate(installation.id, owner, 2, 'provider-401');
     expect(result).toMatchObject({ installation: { status: 'AUTH_REQUIRED', revision: 3 }, providerRevoked: false });
-    expect(await f.service.invalidate(installation.id, owner, 2, 'provider-401')).toEqual(result);
+    expect(await f.service.invalidate(installation.id, owner, 2, 'provider-401')).toEqual({ ...result, replayed: true });
     await expect(f.service.accessToken(installation.id, owner)).rejects.toMatchObject({ code: 'SHOPIFY_AUTH_REQUIRED' });
     const state = await f.engine.snapshot();
     expect(state.extensions!.fixtureMerchantRecords).toEqual([{ id: 'preserved' }]);
@@ -214,7 +214,7 @@ describe('durable Shopify OAuth and credential lifecycle', () => {
     const installation = (await f.service.list(owner)).installations[0];
     const disconnected = await f.service.disconnect(installation.id, owner, installation.revision, 'disconnect');
     release(); await expect(callback).rejects.toMatchObject({ code: 'SHOPIFY_INSTALLATION_CHANGED' });
-    expect(await f.service.disconnect(installation.id, owner, installation.revision, 'disconnect')).toEqual(disconnected);
+    expect(await f.service.disconnect(installation.id, owner, installation.revision, 'disconnect')).toEqual({ ...disconnected, replayed: true });
     expect(await f.service.getInstallation(installation.id, owner)).toMatchObject({ status: 'DISCONNECTED' });
     expect((await f.engine.snapshot()).extensions!.shopifyOAuth).toMatchObject({ installations: [{ encryptedTokens: null }] });
     await expect(f.service.accessToken(installation.id, owner)).rejects.toMatchObject({ code: 'SHOPIFY_AUTH_REQUIRED' });

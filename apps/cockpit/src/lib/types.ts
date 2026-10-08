@@ -25,7 +25,9 @@ export type Activity = {
 };
 export type Telemetry = {
   mode: 'simulation' | 'live'; status: 'running' | 'paused' | 'killed';
-  metrics: { revenue: number; revenueChange: number; orders: number; ordersChange: number; margin: number; marginChange: number; adSpend: number; adSpendCeiling: number; activeAgents: number; pendingInterrupts: number };
-  chart: { date: string; label: string; revenue: number; spend: number }[];
+  /** Ledger-derived only. Nothing fabricated may appear here. */
+  metrics: { revenue: number; orders: number; adSpend: number; adSpendCeiling: number; activeAgents: number; pendingInterrupts: number };
+  /** Illustrative values for the local simulation. Never present these as observed data. */
+  synthetic: { revenueChange: number; ordersChange: number; margin: number; marginChange: number; chart: { date: string; label: string; revenue: number; spend: number }[]; note: string };
   agents: Agent[]; products: Product[]; orders: Order[]; activity: Activity[]; config: Config; interrupts: Interrupt[]; updatedAt: string;
 };

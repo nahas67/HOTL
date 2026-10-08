@@ -1162,30 +1162,33 @@ export function Cockpit({ initialSection }: { initialSection: string }) {
 }
 
 function Metrics({ data }: { data: Telemetry }) {
-  const { metrics: m } = data;
+  const { metrics: m, synthetic: s } = data;
+  // `metrics` holds only ledger-derived values. Trend percentages and net margin come from
+  // `synthetic` and are labelled as illustrative, because presenting them beside measured
+  // revenue would imply they were observed (AGENTS.md rule 6).
   const values = [
     {
       name: "Total revenue",
       value: money(m.revenue),
       icon: CircleDollarSign,
-      change: `${m.revenueChange >= 0 ? "+" : ""}${m.revenueChange}%`,
-      note: "vs. previous period",
+      change: `${s.revenueChange >= 0 ? "+" : ""}${s.revenueChange}%`,
+      note: "Illustrative trend, not observed",
       points: "0,29 10,25 20,29 30,16 40,21 50,18 60,23 70,8 80,12 90,3 100,9",
     },
     {
       name: "Orders fulfilled",
       value: number(m.orders),
       icon: ShoppingBag,
-      change: `${m.ordersChange >= 0 ? "+" : ""}${m.ordersChange}%`,
-      note: "vs. previous period",
+      change: `${s.ordersChange >= 0 ? "+" : ""}${s.ordersChange}%`,
+      note: "Illustrative trend, not observed",
       points: "0,31 10,26 20,25 30,18 40,24 50,15 60,18 70,13 80,16 90,5 100,6",
     },
     {
       name: "Net margin",
-      value: pct(m.margin),
+      value: pct(s.margin),
       icon: TrendingUp,
-      change: `+${(m.marginChange * 100).toFixed(1)} pts`,
-      note: `${pct(data.config.marginFloor)} minimum`,
+      change: `+${(s.marginChange * 100).toFixed(1)} pts`,
+      note: `Illustrative, not observed · ${pct(data.config.marginFloor)} minimum`,
       points: "0,26 10,25 20,20 30,23 40,13 50,17 60,12 70,16 80,7 90,10 100,3",
     },
   ];
@@ -1251,7 +1254,7 @@ function Metrics({ data }: { data: Telemetry }) {
 
 function RevenueChart({ data }: { data: Telemetry }) {
   const [days, setDays] = useState("30");
-  const chart = days === "7" ? data.chart.slice(-7) : data.chart;
+  const chart = days === "7" ? data.synthetic.chart.slice(-7) : data.synthetic.chart;
   const chartRevenue = chart.reduce((sum, point) => sum + point.revenue, 0);
   return (
     <section className="panel revenue-panel">

@@ -149,7 +149,7 @@ describe('Shopify HTTP authorization and delivery boundaries', () => {
     expect(cancelled.statusCode).toBe(200);
     expect(cancelled.json()).toMatchObject({ decision: 'allow', operationId: id, status: 'CANCELLED' });
     const repeated = await f.app.inject({ method: 'POST', url, headers: ownerHeaders, payload: { reason } });
-    expect(repeated.json()).toEqual(cancelled.json());
+    expect(repeated.json()).toEqual({ ...cancelled.json(), replayed: true });
     expect((await f.app.inject({ method: 'POST', url, headers: { ...ownerHeaders, 'idempotency-key': 'new-cancel-key' }, payload: { reason } })).json().error.code).toBe('OPERATION_NOT_CANCELLABLE');
     const restored = await createEngine({ filePath: f.filePath, seed: false });
     const state = await restored.snapshot();
@@ -244,7 +244,7 @@ describe('Shopify HTTP authorization and delivery boundaries', () => {
     expect(shopifyData(await restored.snapshot()).inbox).toMatchObject([{ status: 'PENDING', installationId: installed.id }]);
     const app = await createServer({ engine: restored, mode: 'simulation', workspaceId: 'http-workspace', internalToken: ownerHeaders['x-hotl-internal-token'] }); servers.push(app);
     const repeated = await app.inject({ method: 'POST', url, headers, payload: body });
-    expect(repeated.statusCode).toBe(202); expect(repeated.json()).toEqual(accepted.json());
+    expect(repeated.statusCode).toBe(202); expect(repeated.json()).toEqual({ ...accepted.json(), replayed: true });
     const newDelivery = await app.inject({ method: 'POST', url, headers: { ...headers, 'x-shopify-webhook-id': 'http-delivery-2' }, payload: body });
     expect(newDelivery.statusCode).toBe(202); expect(newDelivery.json().duplicate).toBe(true);
     expect(shopifyData(await restored.snapshot()).inbox).toHaveLength(1);

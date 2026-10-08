@@ -101,7 +101,7 @@ describe('Business Constitution and direct engine authorization', () => {
     expect(results.filter(result => result.decision === 'allow')).toHaveLength(1);
     expect(results.filter(result => result.reason === 'CONSTITUTION_CHANGED')).toHaveLength(1);
     expect((await engine.snapshot()).constitution).toMatchObject({ version: 2, projectName: 'Owner One' });
-    expect(await engine.updateConstitution(patch, owner, 'owner-one')).toEqual(results[0]);
+    expect(await engine.updateConstitution(patch, owner, 'owner-one')).toEqual({ ...results[0], replayed: true });
     await expect(engine.updateConstitution({ ...patch, projectName: 'Different replay' }, owner, 'owner-one')).rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' });
     expect((await engine.snapshot()).constitutionHistory).toHaveLength(2);
   });
@@ -201,7 +201,7 @@ describe('Business Constitution and direct engine authorization', () => {
     expect(allowed.decision).toBe('allow');
     await ownerPolicy(engine, { mode: 'MANUAL' });
     const before = await engine.snapshot();
-    expect(await engine.launchCampaign(request, marketing, 'historical-allow')).toEqual(allowed);
+    expect(await engine.launchCampaign(request, marketing, 'historical-allow')).toEqual({ ...allowed, replayed: true });
     expect((await engine.snapshot()).audit).toEqual(before.audit);
     expect(await engine.launchCampaign(request, marketing, 'fresh-execution')).toMatchObject({ decision: 'deny', reason: 'CONSTITUTION_CHANGED' });
     expect((await engine.snapshot()).campaigns).toHaveLength(1);
@@ -295,7 +295,7 @@ describe('Business Constitution and direct engine authorization', () => {
     expect(state.reservations.map(({ revision: _revision, ...reservation }) => reservation)).toEqual(legacy.reservations);
     expect(state.orders.every(order => order.revision === 1)).toBe(true);
     expect(state.interrupts.every(interrupt => interrupt.payload.legacyReviewRequired)).toBe(true);
-    expect(await migrated.checkSpend(request, owner, 'legacy-persisted-key')).toEqual(allowed);
+    expect(await migrated.checkSpend(request, owner, 'legacy-persisted-key')).toEqual({ ...allowed, replayed: true });
     expect(await migrated.launchCampaign({ campaignId: 'migration-auto', requestedAmount: 1, expectedConstitutionVersion: 1, expectedRevision: 0 }, marketing, 'migration-auto')).toMatchObject({ decision: 'deny', reason: 'MANUAL_CONTROL' });
     expect(await migrated.resolveInterrupt('int-refund-1029', { decision: 'approve' }, owner, 'unreviewed-legacy')).toMatchObject({ decision: 'deny', reason: 'LEGACY_REVIEW_REQUIRED' });
     expect(await migrated.resolveInterrupt('int-refund-1029', { decision: 'approve', reviewLegacy: true, expectedConstitutionVersion: 1, expectedRevision: 1 }, owner, 'reviewed-legacy')).toMatchObject({ status: 'resolved', execution: { decision: 'allow', amount: 42 } });

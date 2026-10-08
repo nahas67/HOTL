@@ -25,7 +25,7 @@ describe('guarded integration storage and durable sync', () => {
   it('encrypts credentials, binds identity and replays registration without leaking secrets to audit or API', async () => {
     const { service, engine, filePath } = await fixture();
     const registered = await service.register(input, actor, 'register');
-    expect(await service.register(input, actor, 'register')).toEqual(registered);
+    expect(await service.register(input, actor, 'register')).toEqual({ ...registered, replayed: true });
     expect(await readFile(filePath, 'utf8')).not.toContain(input.credentials.accessToken);
     expect(JSON.stringify(await service.list(actor))).not.toMatch(/encryptedCredentials|test-secret/);
     expect(JSON.stringify((await engine.snapshot()).audit)).not.toContain(input.credentials.accessToken);
