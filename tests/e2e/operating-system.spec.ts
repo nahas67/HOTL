@@ -77,7 +77,7 @@ test('connection setup rejects an unsafe host and never invents connection healt
   await page.getByLabel('Shop domain').fill('127.0.0.1');
   await page.getByLabel('Admin API access token').fill('invalid-browser-drill-token');
   await page.getByRole('button', { name: 'Save credentials' }).click();
-  await expect(page.getByRole('alert')).toBeVisible();
+  await expect(page.getByRole('alert').filter({ hasText: 'Request validation failed.' })).toBeVisible();
   const data = await (await request.get('http://127.0.0.1:4100/api/integrations', { headers })).json();
   expect(data.connections).toHaveLength(0);
   expect(await page.evaluate(() => JSON.stringify(localStorage))).not.toContain('invalid-browser-drill-token');
