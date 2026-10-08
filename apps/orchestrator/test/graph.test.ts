@@ -156,6 +156,34 @@ describe('real LangGraph and real guardrail HTTP integration', () => {
     expect((await engine.snapshot()).refunds).toEqual(final.refunds);
   });
 
+  // A resolved approval must stop being an approval target. The campaign gate
+  // below denies on the daily ceiling, so it produces no new interrupt; the run
+  // then completes. Nothing is pending, so the run must not still advertise the
+  // catalog interrupt the owner already resolved.
+  it('advertises no pending interrupt between interrupts or after completion', async () => {
+    const { engine, manager } = await fixture({ campaignAmount: 100000 });
+    await validDraft(engine); await mode(engine, 'COPILOT');
+    let run = await manager.start('daily', 'no-stale-interrupt-id');
+    expect(run.status).toBe('interrupted');
+    const catalogApproval = run.interruptId!;
+    expect(catalogApproval).toBeTruthy();
+    // While genuinely waiting, the advertised id must be the one the guardrail
+    // still holds pending for this run.
+    const waitingFor = (await engine.snapshot()).interrupts.filter(i => i.threadId === run.runId && i.status === 'pending');
+    expect(waitingFor.map(i => i.id)).toEqual([catalogApproval]);
+
+    // Drive the run to a terminal state. The catalog approval resolves; the
+    // campaign is denied by the daily ceiling, so it raises no replacement.
+    while (run.status === 'interrupted') run = await resolve(engine, manager, run);
+    expect(run.status).toBe('completed');
+    expect((await engine.snapshot()).interrupts.filter(i => i.threadId === run.runId && i.status === 'pending')).toHaveLength(0);
+
+    expect(run.interruptId).toBeNull();
+    expect((await manager.get(run.runId)).interruptId).toBeNull();
+    // The resolved id is still recorded as resolved, so replay stays a no-op.
+    expect(run.resolvedInterruptIds).toContain(catalogApproval);
+  });
+
   it('evaluates a MANUAL cycle without executing public or financial mutations', async () => {
     const { engine, manager } = await fixture();
     await validDraft(engine); await mode(engine, 'MANUAL');

@@ -69,11 +69,17 @@ export function createCommerceGraph(gateway: GuardrailGateway, checkpointer: Che
   }
   async function execute(state: State): Promise<Update> {
     const plan = state.plan;
-    if (!plan) return { lastDecision: { decision: 'skip' } };
+    // A skipped stage has no action to authorize, so nothing is pending an owner.
+    if (!plan) return { lastDecision: { decision: 'skip' }, interruptId: null };
     // The preceding node checkpoints this exact body and key. A replayed allow
     // never causes a separate provider action in the runtime graph.
     const decision = await gateway.execute(plan.agent, plan.path, plan.body, plan.key);
-    return { lastDecision: decision, guardrailDecisions: [decision], ...(decision.decision === 'escalated' && decision.interruptId ? { interruptId: decision.interruptId } : {}),
+    // Always assign. This field means "the interrupt this run is waiting on",
+    // not "the last interrupt id ever seen". Carrying a resolved id forward
+    // would advertise an approval the owner already decided, and would let an
+    // escalation carrying no id resume against the wrong proposal.
+    const interruptId = decision.decision === 'escalated' ? decision.interruptId ?? null : null;
+    return { lastDecision: decision, guardrailDecisions: [decision], interruptId,
       ...(plan.stage === 'supplier' && decision.decision !== 'escalated' && !staleReasons.has(decision.reason ?? '') ? { supplierFinished: [lineId(plan.body.orderId, plan.body.productId)] } : {}) };
   }
   function afterAction(state: State) {
@@ -106,9 +112,9 @@ export function createCommerceGraph(gateway: GuardrailGateway, checkpointer: Che
     .addNode('sourcing_supplier_query', node('sourcing.supplier_query', 'sourcing_agent', 'Reading candidate cost evidence from the saved catalog snapshot', () => ({})))
     .addNode('sourcing_margin_gate', node('sourcing.margin_gate', 'sourcing_agent', 'Requesting a deterministic listing margin evaluation', async state => {
       const product = state.productDrafts[0];
-      if (!product || !state.plan) return { lastDecision: { decision: 'skip' } };
+      if (!product || !state.plan) return { lastDecision: { decision: 'skip' }, interruptId: null };
       const decision = await gateway.execute('sourcing_agent', '/listing/margin-check', { sku: product.sku, sellingPrice: product.price, landedCost: product.landedCost, estimatedCac: product.estimatedCac, currency: 'USD' }, key(state, 'catalog', 'margin'));
-      return { lastDecision: decision, guardrailDecisions: [decision] };
+      return { lastDecision: decision, guardrailDecisions: [decision], interruptId: null };
     }))
     .addNode('sourcing_publish_or_reject', node('sourcing.publish_or_reject', 'sourcing_agent', 'Submitting the saved listing intent to guardrails when its margin passes', state => state.lastDecision.decision === 'allow' ? execute(state) : {}))
     .addNode('marketing_copy_and_creative', node('marketing.copy_and_creative', 'marketing_agent', 'Preparing a campaign proposal against current advertising policy', async state => {
@@ -155,6 +161,9 @@ export function createCommerceGraph(gateway: GuardrailGateway, checkpointer: Che
       const expired = decision.status === 'expired';
       return { status: 'running' as const, activeStage: stage, lastDecision: expired ? { decision: 'deny', reason: 'CONSTITUTION_CHANGED', replan: true } : { decision: decision.status },
         resolvedInterruptIds: state.interruptId ? [state.interruptId] : [],
+        // The owner decision is consumed here. The id moves to
+        // resolvedInterruptIds, so it must stop being advertised as pending.
+        interruptId: null,
         ...(stage === 'supplier' && !expired && state.plan ? { supplierFinished: [lineId(state.plan.body.orderId, state.plan.body.productId)] } : {}),
         logs: [{ node: 'human_interrupt', summary: expired ? 'The saved proposal expired; current evidence must be evaluated again.' : `Owner decision: ${decision.status}` }] };
     })
