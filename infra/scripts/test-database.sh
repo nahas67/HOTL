@@ -8,12 +8,19 @@ cleanup() { docker rm -f "$container" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 docker run -d --name "$container" -e POSTGRES_PASSWORD=hotl-disposable-test-only -e POSTGRES_DB=hotl postgres:16-alpine >/dev/null
 ready=false
-for attempt in $(seq 1 30); do
-  if docker exec "$container" pg_isready -U postgres -d hotl >/dev/null 2>&1; then ready=true; break; fi
+for attempt in $(seq 1 60); do
+  # Connect over the loopback interface to the exact database this drill uses. `pg_isready`
+  # is not a sufficient gate: it reports "accepting connections" while the image is still
+  # running its initialization step, before POSTGRES_DB is created. Gating on that made the
+  # drill pass on slow machines and fail on fast ones with `database "hotl" does not exist`,
+  # so the result depended on runner timing rather than on the migration. See
+  # infra/scripts/test-runtime-ledger.sh for the same rule applied there.
+  if docker exec "$container" psql -X -U postgres --host 127.0.0.1 --dbname hotl \
+       --tuples-only --no-align --command 'select 1' >/dev/null 2>&1; then ready=true; break; fi
   sleep 1
 done
 if [[ "$ready" != true ]]; then docker logs "$container"; exit 1; fi
-sql() { docker exec -i "$container" psql -X -U postgres -d hotl -v ON_ERROR_STOP=1 "$@"; }
+sql() { docker exec -i "$container" psql -X -U postgres --host 127.0.0.1 --dbname hotl -v ON_ERROR_STOP=1 "$@"; }
 sql < "$root/infra/postgres/bootstrap.sql"
 sql < "$root/infra/supabase/migrations/202609070001_hotl.sql"
 sql < "$root/infra/scripts/test-database.sql"
