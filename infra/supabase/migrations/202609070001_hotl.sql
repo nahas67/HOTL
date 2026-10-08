@@ -357,7 +357,12 @@ revoke all on function public.enforce_refund_aggregate() from public,anon,authen
 revoke all on function public.block_immutable_mutation() from public,anon,authenticated;
 revoke all on function public.prevent_kill_reset() from public,anon,authenticated;
 revoke all on function public.audit_service_mutation() from public,anon,authenticated;
-grant execute on function public.append_audit(uuid,text,text,text,jsonb),public.reserve_ad_spend(uuid,text,text,bigint,text,text),public.begin_ad_spend(uuid,text,uuid),public.commit_ad_spend(uuid,text,uuid,bigint,text,text) to hotl_guardrail,service_role;
+-- Only the three spend RPCs are callable by the service roles. append_audit is deliberately
+-- NOT granted: all four of its call sites are inside SECURITY DEFINER code that already runs
+-- with definer rights, so granting it would let any holder of the guardrail login append a
+-- forged, hash-chain-valid, irreversible audit row for any owner (rule 2).
+grant execute on function public.reserve_ad_spend(uuid,text,text,bigint,text,text),public.begin_ad_spend(uuid,text,uuid),public.commit_ad_spend(uuid,text,uuid,bigint,text,text) to hotl_guardrail,service_role;
+revoke all on function public.append_audit(uuid,text,text,text,jsonb) from hotl_guardrail,service_role;
 
 -- Realtime emits only the rows visible to each authenticated owner's SELECT policy.
 do $$ begin

@@ -142,3 +142,98 @@ describe('Shopify durable inbox and reconciliation worker', () => {
     expect(await f.service.workOnce()).toMatchObject({ status: 'FAILED', reason: 'SYNC_CURSOR_INVALID' }); expect(shopifyData(await f.engine.snapshot()).snapshots).toEqual([]);
   });
 });
+
+/**
+ * A crash between the third claim commit and its result commit leaves a RUNNING job
+ * with attempts=3 and an expired lease. Its recovery branch must still produce a VALID
+ * ledger, or every later worker pass throws on that job and the whole workspace stops
+ * reconciling while the linked inbox evidence stays non-terminal forever.
+ */
+describe('Shopify exhausted-crash recovery and stranded inbox evidence', () => {
+  const crashedAt = '2026-09-17T11:00:00.000Z';
+  async function seedCrash(engine: Awaited<ReturnType<typeof createEngine>>, installationId: string, extra?: (data: ReturnType<typeof shopifyData>, jobId: string) => void) {
+    const jobId = randomUUID(), eventId = randomUUID();
+    await engine.extensionTransaction('integration.fixture.crashed', {}, actor, `crash-${randomUUID()}`, state => {
+      const data = shopifyData(state);
+      data.jobs.push({ id: jobId, installationId, ownerId: actor.id, status: 'RUNNING', attempts: 3, createdAt: crashedAt,
+        leaseUntil: '2026-09-17T11:30:00.000Z', claim: randomUUID() });
+      data.inbox.push({ id: eventId, installationId, ownerId: actor.id, digest: 'a'.repeat(64), deliveryId: 'crash-delivery',
+        topic: 'products/update', receivedAt: crashedAt, status: 'RECONCILING', attempts: 3, syncJobId: jobId,
+        queuedAt: crashedAt, reconciliationStartedAt: crashedAt });
+      extra?.(data, jobId);
+      return { seeded: true };
+    });
+    return { jobId, eventId };
+  }
+
+  it('retires the exhausted job without leaving a claim, so the next pass still runs', async () => {
+    const f = await fixture();
+    const { jobId, eventId } = await seedCrash(f.engine, f.id);
+    expect(await f.service.workOnce()).toMatchObject({ claimed: false, status: 'FAILED' });
+    const data = shopifyData(await f.engine.snapshot());
+    expect(data.jobs.find(job => job.id === jobId)).toMatchObject({ status: 'FAILED', errorCode: 'SYNC_ATTEMPTS_EXHAUSTED' });
+    expect(data.jobs.find(job => job.id === jobId)).not.toHaveProperty('claim');
+    // A non-terminal event would keep counting against the webhook backlog ceiling.
+    expect(data.inbox.find(event => event.id === eventId)).toMatchObject({ status: 'FAILED', errorCode: 'SYNC_ATTEMPTS_EXHAUSTED' });
+    expect(await f.service.workOnce()).toEqual({ idle: true });
+    expect(shopifyData(await f.engine.snapshot()).jobs.find(job => job.id === jobId)).toMatchObject({ status: 'FAILED' });
+    expect(f.connector.listProducts).not.toHaveBeenCalled();
+    expect((await f.engine.snapshot()).audit.some(event => event.eventType === 'integration.shopify.sync.claimed')).toBe(true);
+  });
+
+  it('retires the crashed job cleanly and still drains unrelated work on the next pass', async () => {
+    const f = await fixture();
+    await seedCrash(f.engine, f.id);
+    const queued = await f.service.queueSync(f.id, actor, 'unrelated-sync');
+    // The regression: this pass used to leave a claim on a terminal job, which made the
+    // whole ledger invalid so every later pass threw and the workspace wedged. It must
+    // return normally instead.
+    expect(await f.service.workOnce()).toMatchObject({ claimed: false, status: 'FAILED' });
+    expect(f.connector.listProducts).not.toHaveBeenCalled();
+    // One job is retired per pass by design, so the unrelated sync drains on the next tick
+    // rather than in the retirement pass. What matters is that the worker still makes
+    // progress instead of being wedged.
+    await f.service.workOnce();
+    expect(shopifyData(await f.engine.snapshot()).jobs.find(job => job.id === queued.jobId)?.status).toBe('COMPLETED');
+    expect(f.connector.listProducts).toHaveBeenCalledTimes(1);
+  });
+
+  it('resolves evidence stranded on a failed job and reconciles evidence stranded on a completed job', async () => {
+    const f = await fixture();
+    await f.service.queueSync(f.id, actor, 'failing-sync');
+    const seeded = shopifyData(await f.engine.snapshot()).jobs[0];
+    const failedQueued = randomUUID(), failedReconciling = randomUUID();
+    await f.engine.extensionTransaction('integration.fixture.stranded', {}, actor, 'stranded-failed', state => {
+      const data = shopifyData(state), job = data.jobs[0];
+      job.status = 'FAILED'; job.errorCode = 'PROVIDER_STATE_INCOMPLETE'; job.completedAt = '2026-09-17T11:05:00.000Z';
+      delete job.claim; delete job.leaseUntil;
+      data.inbox.push({ id: failedQueued, installationId: f.id, ownerId: actor.id, digest: 'b'.repeat(64), deliveryId: 'stranded-queued',
+        topic: 'products/update', receivedAt: crashedAt, status: 'RECONCILIATION_QUEUED', attempts: 0, syncJobId: job.id, queuedAt: crashedAt });
+      data.inbox.push({ id: failedReconciling, installationId: f.id, ownerId: actor.id, digest: 'c'.repeat(64), deliveryId: 'stranded-reconciling',
+        topic: 'products/update', receivedAt: crashedAt, status: 'RECONCILING', attempts: 1, syncJobId: job.id, queuedAt: crashedAt, reconciliationStartedAt: crashedAt });
+      return { seeded: true };
+    });
+    await f.service.workOnce();
+    let data = shopifyData(await f.engine.snapshot());
+    expect(data.inbox.find(event => event.id === failedQueued)).toMatchObject({ status: 'FAILED', errorCode: 'PROVIDER_STATE_INCOMPLETE' });
+    expect(data.inbox.find(event => event.id === failedReconciling)).toMatchObject({ status: 'FAILED', errorCode: 'PROVIDER_STATE_INCOMPLETE' });
+    expect(data.jobs.find(job => job.id === seeded.id)).toMatchObject({ status: 'FAILED' });
+
+    await f.service.queueSync(f.id, actor, 'completing-sync');
+    await f.service.workOnce();
+    const completing = shopifyData(await f.engine.snapshot()).jobs.find(job => job.status === 'COMPLETED')!;
+    const recovered = randomUUID();
+    await f.engine.extensionTransaction('integration.fixture.stranded', {}, actor, 'stranded-completed', state => {
+      shopifyData(state).inbox.push({ id: recovered, installationId: f.id, ownerId: actor.id, digest: 'd'.repeat(64), deliveryId: 'stranded-completed',
+        topic: 'products/update', receivedAt: crashedAt, status: 'RECONCILIATION_QUEUED', attempts: 0, syncJobId: completing.id, queuedAt: crashedAt });
+      return { seeded: true };
+    });
+    await f.service.workOnce();
+    data = shopifyData(await f.engine.snapshot());
+    expect(data.inbox.find(event => event.id === recovered)).toMatchObject({ status: 'RECONCILED', reconciledAt: completing.completedAt });
+    // The sweep is durable, audited and idempotent: a repeat pass must not churn the ledger.
+    const auditBefore = (await f.engine.snapshot()).audit.length;
+    expect(await f.service.workOnce()).toEqual({ idle: true });
+    expect((await f.engine.snapshot()).audit.length).toBe(auditBefore);
+  });
+});

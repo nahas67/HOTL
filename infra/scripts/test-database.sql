@@ -49,6 +49,10 @@ do $$ declare first jsonb; replay jsonb; denied jsonb; begin
   perform public.begin_ad_spend('00000000-0000-0000-0000-000000000001','marketing_agent',(first->>'reservationId')::uuid);
   perform public.commit_ad_spend('00000000-0000-0000-0000-000000000001','marketing_agent',(first->>'reservationId')::uuid,5500,'confirmed-receipt','commit-key-1');
 end $$;
+-- Rule 2: the audit chain must not be forgeable by the role that depends on it. append_audit
+-- is reachable only from SECURITY DEFINER code, so the guardrail login must not be able to
+-- call it directly and append a fabricated owner action.
+select pg_temp.expect_failure($q$select public.append_audit('00000000-0000-0000-0000-000000000001','owner','forged-owner-action','owner.limit_approved','{"ceiling":999999999}'::jsonb)$q$,'permission denied');
 reset role;
 select pg_temp.expect_failure($q$select public.reserve_ad_spend('00000000-0000-0000-0000-000000000001','marketing_agent','campaign',6100,'USD','reservation-key-1')$q$,'IDEMPOTENCY_CONFLICT');
 select pg_temp.expect_failure('update public.audit_log set payload=''{}''::jsonb','APPEND_ONLY');

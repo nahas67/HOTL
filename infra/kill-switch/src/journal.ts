@@ -12,7 +12,7 @@ export interface KillState {
   actions: KillAction[];
   revision: number;
 }
-type Event = { sequence: number; timestamp: string; type: 'engaged' | 'action'; payload: Record<string, unknown>; previousHash: string; hash: string };
+type Event = { sequence: number; timestamp: string; type: 'initialized' | 'engaged' | 'action'; payload: Record<string, unknown>; previousHash: string; hash: string };
 const emptyState = (): KillState => ({ engaged: false, engagedAt: null, engagedBy: null, reason: null, actions: [], revision: 0 });
 const digest = (data: Omit<Event, 'hash'>) => createHash('sha256').update(JSON.stringify(data)).digest('hex');
 
@@ -30,6 +30,7 @@ export class KillJournal {
     await this.lock.writeFile(String(process.pid));
     try {
       let content: string;
+      let created = false;
       try { content = await readFile(this.path, 'utf8'); }
       catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || !this.allowInitialize) throw error;
@@ -37,9 +38,18 @@ export class KillJournal {
         await handle.sync();
         await handle.close();
         content = '';
+        created = true;
       }
+      // Rule 7: missing, corrupt or truncated emergency state must deny, never silently reset.
+      // A journal that already existed but yields no events is indistinguishable from a latch
+      // that was truncated away, and reporting `engaged:false` there would resume commerce
+      // after a global stop. `allowInitialize` authorizes CREATING a journal, never accepting a
+      // blank one. A journal this process just created is legitimately empty until the
+      // creation sentinel below is written, so it is the only blank case allowed.
+      const lines = content.split('\n').map(line => line.trim()).filter(Boolean);
+      if (!lines.length && !created) throw new Error('Empty kill journal: manual recovery required');
       if (content && !content.endsWith('\n')) throw new Error('Incomplete kill journal: manual recovery required');
-      for (const line of content.split('\n').filter(Boolean)) {
+      for (const line of lines) {
         const event = JSON.parse(line) as Event;
         const { hash, ...data } = event;
         if (data.sequence !== this.state.revision + 1 || data.previousHash !== this.previousHash || digest(data) !== hash) {
@@ -47,13 +57,20 @@ export class KillJournal {
         }
         this.apply(event);
       }
+      // Durable proof that this journal was initialized on purpose. Without it a later
+      // restore to zero bytes is indistinguishable from a deliberate fresh start.
+      if (created) await this.append('initialized', { pid: process.pid });
     } catch (error) { await this.close(); throw error; }
   }
 
   snapshot(): KillState { return structuredClone(this.state); }
 
   private apply(event: Event) {
-    if (event.type === 'engaged') {
+    if (event.type === 'initialized') {
+      // Creation sentinel: records that this journal was deliberately started. It changes no
+      // latch state and is never a transition, so a replayed sentinel is still a hard fault.
+      if (this.state.revision !== 0) throw new Error('Invalid kill journal transition');
+    } else if (event.type === 'engaged') {
       if (this.state.engaged) throw new Error('Duplicate latch event');
       this.state.engaged = true;
       this.state.engagedAt = event.timestamp;

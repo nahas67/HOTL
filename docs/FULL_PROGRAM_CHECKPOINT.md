@@ -40,13 +40,17 @@ Harness: `scripts/verify-suite.ps1`; raw logs in `artifacts/verify-2026-10-08/` 
 | Step | Command | Result |
 | --- | --- | --- |
 | Lint | `pnpm lint` | **PASS** (exit 0) |
-| Typecheck | `pnpm exec turbo run typecheck --force` | **PASS** — 11/11 successful, **0 cached** |
-| Unit/workspace tests | `pnpm test` | **PASS** (exit 0) — 19/19 root node tests, 11/11 turbo tasks |
+| Typecheck | `pnpm exec turbo run typecheck --force` | **PASS** — 11/11 successful, **0 cached** (`typecheck.log`) |
+| Unit/workspace tests | `pnpm exec turbo run test --concurrency=2 --force` | **PASS** — **0 cached**, 11/11 turbo tasks (`test.log`) |
+| Root tests | `node --test tests/*.test.mjs` | **PASS** — 12/12 (`test-root.log`) |
 | Build | `pnpm build` | **PASS** (exit 0) |
-| Browser drill | `pnpm test:e2e` | **PASS** — **11/11 passed** (1.2 min) |
-| Migration + RLS drill | `pwsh -File infra/scripts/test-database.ps1` | **PASS** — migration, owner isolation, write denial, audit immutability, refund escrow, kill latch, concurrent spend |
-| Migration + RLS drill (Linux/Docker, CI path) | `bash infra/scripts/test-database.sh` | **PASS** — exit 0, including concurrent-spend denial |
-| Runtime-ledger drill | `pwsh -File infra/scripts/test-runtime-ledger.ps1` | **PASS** — 33/33 tests, restart, backup/restore, restored authorization |
+| Browser drill | `pnpm test:e2e` | **PASS** — **11/11 passed** (`e2e.log`) |
+| Migration + RLS drill | `pwsh -File infra/scripts/test-database.ps1` | **PASS** — includes the new direct-`append_audit` denial |
+| Runtime-ledger drill | `pwsh -File infra/scripts/test-runtime-ledger.ps1` | **PASS** — 33/33; ledger/audit MD5 identical before restart, after restart and after restore |
+
+> **Correction, 2026-10-09.** An earlier revision of this table claimed `--force / 0 cached` while citing a log that read `11 cached, 11 total / FULL TURBO`, because `scripts/verify-suite.ps1` never passed `--force`. The claim was true; the cited artefact contradicted it. **The harness now forces typecheck and the turbo tests**, and every row above names a log showing the result it claims. A turbo cache hit is not evidence, and the harness may not present one as evidence.
+
+Scope note added by the same review: the runtime-ledger restore digest covers `workspace_state` + `audit_entries` only. Shopify tables, the webhook inbox and idempotency records are **outside** that digest.
 
 These are **local** results. They do not satisfy any hosted or provider requirement.
 
@@ -172,6 +176,74 @@ Three ZIP snapshots were tracked in a **public** repository, all added in `716fd
 | **E** — Measured autonomy | Configuration/controls locally exist | Measured shadow outcomes and per-domain eligibility gates | **NOT STARTED** |
 
 **No gate moved this session.** The one substantive change was to engineering integrity, not to gate readiness. Gates A–C remain blocked on owner authority and infrastructure this environment cannot supply.
+
+## 0.6 Safety hardening pass — 2026-10-09
+
+Five independent auditors (guardrail, Shopify, orchestration, infrastructure/security, QA) read disjoint scopes and reported traced findings; the Lead independently re-verified the highest-severity claims before acting. **No gate status changed and no external evidence was claimed.** Six defects were fixed and proven by tests that fail without the fix.
+
+### 0.6.1 CRITICAL — cumulative revenue permanently bricked all checkout
+
+`toMinor` (`packages/schemas/src/index.ts`) called `moneySchema.parse`, which caps at **$1,000,000**. Two monotonic accumulators — `state.baseRevenue` and `product.revenue` — were fed through it without a ceiling. Once either crossed the line, `toMinor` threw `ZodError` inside `applyTransaction` (`engine.ts:158`), which has **no try/catch**, so the throw escaped *before* `this.audit()` at `:160`. From that point every checkout threw, including a trivial one, durably across restart — while `telemetry()` still reported `status: 'running'` and `/api/finance` still looked healthy.
+
+Reproduced independently by the Lead from the code, then by the team's tests. Fixed by:
+
+- `toMinor` is now pure arithmetic; the two-decimal guarantee stays with the request schemas.
+- New `aggregateMoneySchema` + `assertAggregateMoney()` give lifetime totals a domain that cannot collide with the per-transaction one.
+- `applyTransaction` now converts an *unexpected* fault into `deny('STATE_DOMAIN_VIOLATION')` **and writes an audit event**, restoring it from a pre-action snapshot so no partial mutation commits. Typed `GuardrailError`/validation errors still propagate unchanged.
+- `MAX_ORDER_VALUE` (10,000) bounds a single order — a blast-radius bound that denies for every actor including the owner. Exactly at the ceiling is permitted.
+
+Evidence: `apps/guardrail-service/test/money-domain.test.ts` — 6/6, including "keeps accepting ordinary orders after lifetime revenue crosses the old $1M ceiling" and a corrupt-state case asserting a governed denial **plus** an audit entry.
+
+### 0.6.2 Rule 7 fail-open — a blank kill journal reported "not engaged"
+
+`infra/kill-switch/src/journal.ts`: `''.split('\n').filter(Boolean)` yields `[]`, so an existing **zero-length** journal never called `apply()` and the service started with `engaged: false`. A blank restore of an engaged latch would resume commerce after a global stop.
+
+The fix needed a durable way to tell a *legitimately initialized* empty journal from a *wiped* one — the two are identical on disk. A creation sentinel (`type: 'initialized'`) is now written durably when the journal is created, so an existing journal with no events can only mean truncation. An existing blank journal is refused; a newly created one still starts unengaged.
+
+This changes the journal's first line, so two assertions that encoded the old *shape* were updated — the "latch durable before response" check now asserts the engaged event is present in the file rather than assuming it is line 0, which is a **stronger** check of the same property. Journals written by the old code still load unchanged.
+
+Evidence: `infra/kill-switch/test/restore.test.ts` — empty and whitespace faults now refuse; 15/15 kill-switch tests pass.
+
+### 0.6.3 Rule 2 — the audit chain was forgeable by the role that depends on it
+
+`202609070001_hotl.sql:360` granted `EXECUTE` on `public.append_audit(...)` to `hotl_guardrail` and `service_role`, although all four call sites are inside `SECURITY DEFINER` code that already holds definer rights. Any holder of the guardrail login could append a forged, hash-chain-valid, irreversible audit row for **any** owner.
+
+`append_audit` is removed from the grant and explicitly revoked from both roles. `infra/scripts/test-database.sql` now asserts a direct call under `set role hotl_guardrail` fails with `permission denied`, and the drill's independent chain re-derivation still finds zero forged rows.
+
+### 0.6.4 Rule 3/7 — the preflight accepted a simulation-mode emergency plane
+
+`scripts/staging-readiness.mjs` checked only `typeof body.engaged === 'boolean'`, ignoring the `mode` field the kill plane returns. An instance running the repository's published demo credentials reported `VERIFIED` and the process exited 0 — while the same file blocks that token locally. The probe now requires `body.mode === 'live'`. The new test was verified to **fail** against the pre-fix script and pass after.
+
+### 0.6.5 Shopify reconciliation worker wedged on an attempts-exhausted job
+
+`shopify-service.ts:248` set a terminal `FAILED` status but left `claim` and `leaseUntil` behind, which `syncJobSchema` rejects — so `verify()` threw, the transaction rolled back, and **every** subsequent worker pass threw on the same job, with zero provider reads. Linked inbox events never reached a terminal state and kept counting toward the webhook backlog ceiling, so real deliveries would eventually be dropped with 503.
+
+Fixed by clearing the claim/lease and marking linked evidence terminal, plus `sweepStranded()` which resolves orphaned `RECONCILING`/`RECONCILIATION_QUEUED` events whose job is terminal — from durable local evidence only, never applying a webhook body or contacting the provider.
+
+### 0.6.6 Orchestrator checkpoint poisoning
+
+`checkpointer.ts` stored `this.saving = save`, where `save` chains off the previous flush **with no rejection handler**. One transient filesystem fault meant no checkpoint byte was ever written again and every later call rejected with the original stale error, until process restart — plausible on this OneDrive-backed workspace. `this.saving = save.catch(() => {})` keeps the chain alive so the next flush runs its own body.
+
+### 0.6.7 Evidence-integrity defect in this register — corrected
+
+The 2026-10-09 QA audit found that §0.1 claimed `--force / 0 cached` for typecheck while citing a log showing `11 cached / FULL TURBO`, because the named harness never passed `--force`. The claim was true; the citation was false. Fixed in the harness and corrected in §0.1 above, with the scope of the restore digest narrowed to what it actually covers.
+
+### 0.6.8 Confirmed correct — no false positives reported as defects
+
+The auditors independently traced and confirmed, rather than assumed: the one-way kill latch has no disengage path and is enforced at both service and database layer; the runtime ledger's cross-workspace isolation is genuinely binding for a non-owner role; audit-before-success is atomic on both stores; provider POSTs are never retried; compensation requires fresh authority; MANUAL mode executes nothing; and the replan bound caps any stage at three executions. **These are not findings and were not "fixed".**
+
+### 0.6.9 Open, deferred
+
+Recorded so the register is complete. None is claimed as done.
+
+- `checkout()`/`commerceEvent()` bypass `scope()` and `context()` — no engine-level scope or constitution-version binding (HTTP reachability is currently limited to `order_agent`).
+- Idempotency keys share one flat namespace and denials consume them.
+- Replayed historical `allow` is returned with no `replayed` marker.
+- `telemetry()` serves fabricated margin/chart with no provenance marker.
+- Webhook intake is bound to the app secret but not to an installation (cross-installation replay verified).
+- Orchestrator: stale `interruptId`, shipped test fixture in `manager.ts:91-103`, refund-policy reimplementation that has drifted from the guardrail, owner binding on read/resume.
+- `apps/commerce-core/medusa` (25 safety tests) is in no pipeline; the kill-switch↔guardrail HTTP seam has no test; the storefront origin check has no test.
+- `tests/e2e/platform.spec.ts:52` can silently skip a safety assertion.
 
 ## 0.1.1 Runtime-ledger drill — measured recovery evidence
 

@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, open, readFile, rename, unlink } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import { hotlModeSchema, campaignSchema, checkoutSchema, commerceEventSchema, configPatchSchema, fromMinor, listingSchema, marginCheckSchema, pauseSchema, refundSchema, resolveSchema, runEventSchema, spendCheckSchema, spendCommitSchema, supplierOrderSchema, toMinor, type Actor, type AuditEntry, type CommerceOrder } from '@hotl/schemas';
+import { assertAggregateMoney, hotlModeSchema, campaignSchema, checkoutSchema, commerceEventSchema, configPatchSchema, fromMinor, listingSchema, marginCheckSchema, pauseSchema, refundSchema, resolveSchema, runEventSchema, spendCheckSchema, spendCommitSchema, supplierOrderSchema, toMinor, ZodError, type Actor, type AuditEntry, type CommerceOrder } from '@hotl/schemas';
 import { seedState } from './seed.js';
 import { addConstitution } from './constitution.js';
 import { autonomyDomains, constitutionSchema, constitutionPatchSchema, pilotApprovalRequestSchema, pilotEconomicsCalculationIssues, productCreateSchema, productUpdateSchema, campaignPauseSchema, type AutonomyDomain, type BusinessConstitution, type OwnerInterrupt } from '@hotl/schemas';
@@ -20,6 +20,20 @@ const stable = (value:unknown):string => JSON.stringify(value,(_key,item) => ite
 const digest = (value:unknown) => createHash('sha256').update(stable(value)).digest('hex');
 const deny = (reason:string,extra:Result={}):Result => ({decision:'deny',reason,...extra});
 const DAY = (date:Date) => date.toISOString().slice(0,10);
+/**
+ * Hard ceiling on a single order total. A customer cart is not a governed policy action, so
+ * this is a blast-radius bound rather than an approval gate: above it the order is denied for
+ * every actor, including the owner, because no approval path may construct an order whose
+ * value the ledger's money domains cannot represent. Sized far above the seeded catalogue and
+ * above any plausible `maxAutonomousTransaction`, so ordinary commerce is unaffected.
+ */
+export const MAX_ORDER_VALUE=10_000;
+/** Short, non-revealing label for an unexpected fault, safe to persist in the audit chain. */
+const faultLabel=(error:unknown):string=>{
+  const name=error instanceof Error?error.name:'Error';
+  const code=(error as {code?:unknown}|null)?.code;
+  return `${String(name).replace(/[^A-Za-z_]/g,'').slice(0,40)}${typeof code==='string'&&code?`:${code.replace(/[^A-Z_0-9]/gi,'').slice(0,40)}`:''}`;
+};
 function shopifyReferenceIssue(state:EngineState):string|null {
   const commerceRaw=state.extensions?.shopifyCommerce;
   if(commerceRaw===undefined)return null;
@@ -155,7 +169,18 @@ export class GuardrailEngine {
       if(existing.fingerprint!==fingerprint)throw new GuardrailError('IDEMPOTENCY_CONFLICT','This key was already used with a different actor or request.',409);
       return structuredClone(existing.result);
     }
-    const result=await action(state);
+    // Snapshot before the action so an unexpected fault can be denied without committing
+    // whatever half of the mutation had already been applied.
+    const pristine=structuredClone(state);
+    let result:Result;
+    try {result=await action(state);}
+    catch(error) {
+      // Deliberate denials keep their own typed code/status, and invalid caller input keeps
+      // its 400 validation response. Only an *unexpected* fault is converted here.
+      if(error instanceof GuardrailError||error instanceof ZodError) throw error;
+      Object.assign(state,pristine);
+      result=deny('STATE_DOMAIN_VIOLATION',{message:'The ledger could not apply this operation safely; no state was changed.',fault:faultLabel(error)});
+    }
     this.verify(state);
     this.audit(state,actor,operation,{request:payload,result,mode:this.mode},this.summary(operation,result));
     state.idempotency[ledgerKey]={fingerprint,result:structuredClone(result)};
@@ -800,9 +825,14 @@ export class GuardrailEngine {
         items.push({productId:id,name:product.name,quantity,price:product.price});
       }
       const total=fromMinor(items.reduce((sum,item)=>sum+toMinor(item.price)*item.quantity,0));
+      // Bound a single order's value. This is a blast-radius bound, not an approval gate: it
+      // denies for every actor including the owner, because no approval path may construct an
+      // order whose value the ledger's money domains cannot represent. Exactly at the ceiling
+      // is permitted.
+      if(toMinor(total)>MAX_ORDER_VALUE*100)return deny('ORDER_VALUE_LIMIT_EXCEEDED',{maximumOrderValue:MAX_ORDER_VALUE});
       const order:CommerceOrder={id:`ORD-${randomUUID().slice(0,8).toUpperCase()}`,revision:1,customer:input.customer,items,total,refunded:0,status:'processing',createdAt:this.now().toISOString(),tracking:null};
-      for(const line of items) {const product=state.products.find(item=>item.id===line.productId)!;product.inventory-=line.quantity;product.orders+=line.quantity;product.revision=(product.revision??1)+1;product.revenue=fromMinor(toMinor(product.revenue)+toMinor(line.price)*line.quantity);this.supersede(state,product.id);}
-      state.orders.unshift(order);state.baseRevenue=fromMinor(toMinor(state.baseRevenue)+toMinor(total));state.baseOrders++;
+      for(const line of items) {const product=state.products.find(item=>item.id===line.productId)!;product.inventory-=line.quantity;product.orders+=line.quantity;product.revision=(product.revision??1)+1;product.revenue=assertAggregateMoney(fromMinor(toMinor(product.revenue)+toMinor(line.price)*line.quantity),`product ${product.sku} revenue`);this.supersede(state,product.id);}
+      state.orders.unshift(order);state.baseRevenue=assertAggregateMoney(fromMinor(toMinor(state.baseRevenue)+toMinor(total)),'workspace revenue');state.baseOrders++;
       return {decision:'allow',order,mode:this.mode,paymentStatus:'simulated',message:'Simulation order created. No payment was charged.'};
     });
   }

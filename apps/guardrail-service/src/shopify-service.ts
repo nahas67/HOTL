@@ -204,10 +204,51 @@ export class ShopifyCommerceService {
     }
     throw new GuardrailError('SYNC_PAGE_LIMIT', 'Provider pagination exceeded the supported batch.', 422);
   }
+  /**
+   * A terminal sync job leaves RECONCILING and RECONCILIATION_QUEUED events with no
+   * further transition. They would otherwise never be re-picked, would keep counting
+   * against the webhook backlog ceiling, and would show the owner a permanently
+   * queued event. This resolves them from durable local evidence only; it never
+   * applies a webhook body and never contacts the provider.
+   */
+  private async sweepStranded(requester?: Actor): Promise<number> {
+    const data = shopifyData(await this.engine.snapshot());
+    const jobs = new Map(data.jobs.map(job => [job.id, job]));
+    const stranded = data.inbox.filter(event => event.syncJobId && ['RECONCILING', 'RECONCILIATION_QUEUED'].includes(event.status)
+      && ['COMPLETED', 'FAILED'].includes(jobs.get(event.syncJobId)?.status ?? ''));
+    if (!stranded.length) return 0;
+    const owners = [...new Set(stranded.filter(event => !requester || event.ownerId === requester.id).map(event => event.ownerId))];
+    let swept = 0;
+    for (const ownerId of owners) {
+      const ids = stranded.filter(event => event.ownerId === ownerId).map(event => event.id).sort();
+      // Bind the key to the exact stranded set so a later, different set still sweeps.
+      const key = `shopify-sweep:${ownerId}:${createHash('sha256').update(ids.join(',')).digest('hex').slice(0, 32)}`;
+      const result = await this.engine.extensionTransaction('integration.shopify.webhook.stranded-swept',
+        { ownerId, events: ids.length }, { type: 'owner', id: ownerId }, key, state => {
+          const current = shopifyData(state), currentJobs = new Map(current.jobs.map(job => [job.id, job]));
+          const transitions: string[] = [];
+          for (const event of current.inbox) {
+            if (event.ownerId !== ownerId || !event.syncJobId || !['RECONCILING', 'RECONCILIATION_QUEUED'].includes(event.status)) continue;
+            const job = currentJobs.get(event.syncJobId);
+            if (!job || !['COMPLETED', 'FAILED'].includes(job.status)) continue;
+            if (job.status === 'COMPLETED') {
+              event.status = 'RECONCILED'; event.reconciledAt = job.completedAt ?? this.now().toISOString(); delete event.errorCode;
+            } else {
+              event.status = 'FAILED'; event.errorCode = job.errorCode ?? 'SYNC_JOB_FAILED'; delete event.nextAttemptAt;
+            }
+            transitions.push(event.id);
+          }
+          return { swept: transitions.length, eventIds: transitions, meaning: 'Linked inbox evidence reached a terminal state with its authoritative job; no webhook body was applied.' };
+        });
+      swept += Number(result.swept ?? 0);
+    }
+    return swept;
+  }
   async workOnce(requester?: Actor): Promise<Result> {
     if (requester) owner(requester);
     if (this.active) return { busy: true }; this.active = true;
     try {
+      await this.sweepStranded(requester);
       const state = shopifyData(await this.engine.snapshot());
       const event = state.inbox.find(item => ['PENDING', 'RETRY_PENDING'].includes(item.status)
         && (!item.nextAttemptAt || Date.parse(item.nextAttemptAt) <= this.now().getTime()) && (!requester || item.ownerId === requester.id));
@@ -245,7 +286,17 @@ export class ShopifyCommerceService {
       if (job.status !== 'PENDING' && !(job.status === 'RUNNING' && Date.parse(job.leaseUntil ?? '') <= this.now().getTime())) return { claimed: false };
       if (job.nextAttemptAt && Date.parse(job.nextAttemptAt) > this.now().getTime()) return { claimed: false };
       if (shopifyData(state).jobs.some(other => other.id !== id && other.installationId === job.installationId && other.status === 'RUNNING' && Date.parse(other.leaseUntil ?? '') > this.now().getTime())) return { claimed: false };
-      if (job.attempts >= 3) { job.status = 'FAILED'; job.errorCode = 'SYNC_ATTEMPTS_EXHAUSTED'; return { claimed: false, status: 'FAILED' }; }
+      if (job.attempts >= 3) {
+        // A terminal job may not keep its claim or lease. Leaving either behind makes
+        // the whole ledger invalid, so this transaction would roll back and every later
+        // worker pass would throw on this same job, wedging the entire workspace.
+        job.status = 'FAILED'; job.errorCode = 'SYNC_ATTEMPTS_EXHAUSTED'; job.completedAt = this.now().toISOString();
+        delete job.claim; delete job.leaseUntil;
+        for (const event of data.inbox.filter(item => item.syncJobId === job.id && ['RECONCILIATION_QUEUED', 'RECONCILING'].includes(item.status))) {
+          event.status = 'FAILED'; event.errorCode = 'SYNC_ATTEMPTS_EXHAUSTED'; delete event.nextAttemptAt;
+        }
+        return { claimed: false, status: 'FAILED' };
+      }
       job.status = 'RUNNING'; job.attempts++; job.claim = claim; job.leaseUntil = new Date(this.now().getTime() + 1800000).toISOString();
       for (const event of data.inbox.filter(item => item.syncJobId === job.id && ['RECONCILIATION_QUEUED', 'RETRY_PENDING'].includes(item.status))) {
         event.status = 'RECONCILING'; event.reconciliationStartedAt = this.now().toISOString(); event.attempts++;

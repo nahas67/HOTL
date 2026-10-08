@@ -53,7 +53,10 @@ describe('independent kill switch', () => {
     const { service, config, url, engage, headers } = await fixture();
     expect((await engage()).status).toBe(202);
     await service.flush();
-    expect((await readFile(config.journalPath, 'utf8')).split('\n')[0]).toContain('"type":"engaged"');
+    // The latch must already be on disk at response time. The journal now opens with a
+    // durable `initialized` sentinel, so assert the engaged event is present in the file
+    // rather than assuming it is the first line.
+    expect(await readFile(config.journalPath, 'utf8')).toContain('"type":"engaged"');
     expect((await fetch(`${url}/disengage`, { method: 'POST', headers })).status).toBe(404);
     await service.close();
     resources.splice(resources.indexOf(service), 1);

@@ -63,4 +63,51 @@ describe('independent kill-journal restore', () => {
     await expect(restored.initialize()).rejects.toThrow();
     expect(await readFile(backup, 'utf8')).toBe(bytes);
   });
+
+  // Rule 7: corrupt or incomplete emergency state must deny execution, never silently
+  // reset. A zero-byte or whitespace-only file is indistinguishable from a latch that
+  // was truncated to nothing, so it must refuse to start even where initialization is
+  // permitted: `allowInitialize` authorizes creating a journal, never reading one that
+  // already exists.
+  it.each([
+    ['empty', ''],
+    ['whitespace', '\n  \n'],
+  ] as const)('refuses an existing %s journal even when initialization is allowed', async (fault, contents) => {
+    const directory = await mkdtemp(join(tmpdir(), 'hotl-kill-blank-'));
+    directories.push(directory);
+    const path = join(directory, 'blank.jsonl');
+    await writeFile(path, contents);
+    const restored = new KillJournal(path, true);
+    journals.push(restored);
+    await expect(restored.initialize()).rejects.toThrow(/Empty kill journal/);
+  });
+
+  it('distinguishes a never-engaged but initialized journal from a truncated one', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'hotl-kill-fresh-'));
+    directories.push(directory);
+    const path = join(directory, 'fresh.jsonl');
+    // A first start with no existing file durably initializes an unengaged journal.
+    const first = new KillJournal(path, true);
+    journals.push(first);
+    await first.initialize();
+    expect(first.snapshot().engaged).toBe(false);
+    await first.close();
+    journals.splice(journals.indexOf(first), 1);
+    // Restarting against that same never-used journal must still start, unengaged. The
+    // journal opens with a durable `initialized` sentinel, so revision is 1 after creation;
+    // what distinguishes it from a truncated journal is that it starts at all.
+    expect((await readFile(path, 'utf8')).split('\n')[0]).toContain('"type":"initialized"');
+    const restarted = new KillJournal(path, true);
+    journals.push(restarted);
+    await restarted.initialize();
+    expect(restarted.snapshot()).toMatchObject({ engaged: false, revision: 1 });
+    await restarted.close();
+    journals.splice(journals.indexOf(restarted), 1);
+    // Engaging and reopening it still reproduces the one-way latch.
+    const engaged = new KillJournal(path, true);
+    journals.push(engaged);
+    await engaged.initialize();
+    await engaged.append('engaged', { actor: 'fresh-drill-owner', reason: 'Initialized journal drill', actions: ['queues_halted'] });
+    expect(engaged.snapshot().engaged).toBe(true);
+  });
 });

@@ -4,6 +4,7 @@ export { ZodError } from "zod";
 export const hotlModeSchema = z.enum(["simulation", "live"]);
 
 // Public amounts are USD decimals. Deterministic calculations always use minor units.
+/** Per-transaction money domain: the validated maximum for any single requested amount. */
 export const moneySchema = z
   .number()
   .finite()
@@ -13,6 +14,18 @@ export const moneySchema = z
     (value) => Math.abs(value * 100 - Math.round(value * 100)) < 0.0000001,
     "Use at most two decimal places",
   );
+/**
+ * Lifetime aggregate domain for monotonic ledger totals (workspace revenue, per-product
+ * revenue). Deliberately far wider than the per-transaction ceiling: these totals grow
+ * without bound over the life of a workspace, so bounding them by the domain of a single
+ * request would make a legitimately long-lived ledger unusable. A breach here is a real
+ * fault and is asserted explicitly instead of surfacing inside an arithmetic helper.
+ */
+export const aggregateMoneySchema = z
+  .number()
+  .finite()
+  .min(0)
+  .max(1_000_000_000_000);
 export const positiveMoneySchema = moneySchema.refine(
   (value) => value > 0,
   "Amount must be positive",
@@ -159,9 +172,31 @@ export const runEventSchema = z
     summary: z.string().max(1000).optional(),
   })
   .strict();
-export const toMinor = (amount: number): number =>
-  Math.round(moneySchema.parse(amount) * 100);
+/**
+ * Pure minor-unit conversion. This MUST NOT validate: it also converts persisted lifetime
+ * aggregates whose domain is deliberately wider than any single request's, so parsing here
+ * turned a long-lived ledger into an unhandled exception mid-transaction. The two-decimal
+ * guarantee is owned by the request schema that validates each incoming amount
+ * (`moneySchema`/`positiveMoneySchema`); callers holding a lifetime total assert
+ * `aggregateMoneySchema` explicitly at the point of accumulation.
+ */
+export const toMinor = (amount: number): number => Math.round(amount * 100);
 export const fromMinor = (amount: number): number => amount / 100;
+/**
+ * Explicit lifetime-total assertion. Returns the value unchanged when it is in domain and
+ * raises a named fault otherwise, so a ledger total can never silently drift out of range.
+ */
+export const assertAggregateMoney = (amount: number, label: string): number => {
+  const parsed = aggregateMoneySchema.safeParse(amount);
+  if (!parsed.success) throw new AggregateDomainError(label, amount);
+  return parsed.data;
+};
+export class AggregateDomainError extends Error {
+  constructor(label: string, amount: number) {
+    super(`Ledger aggregate "${label}" is outside the lifetime money domain: ${amount}`);
+    this.name = "AggregateDomainError";
+  }
+}
 export type GuardrailConfig = z.infer<typeof configSchema>;
 export type Actor = { type: "agent" | "owner" | "system"; id: string };
 export type AuditEntry = {

@@ -86,7 +86,7 @@ test('active probes are opt-in, read-only GET requests, and preserve manual-work
     if (String(url).endsWith('/api/shopify/oauth/callback')) return { ok: false, status: 403, json: async () => ({}) };
     const body = String(url).endsWith('/health/ready')
       ? { status: 'ready', persistence: 'available', workspaceBinding: 'verified', runtimeRole: 'non-superuser-no-bypassrls', runtimeDdl: 'denied', killReader: 'reachable' }
-      : String(url).endsWith('/state') ? { engaged: false }
+      : String(url).endsWith('/state') ? { engaged: false, mode: 'live' }
         : { status: 'ready', ingressReady: true, workerReady: false, reconciliationReady: true, reconciliationMode: 'OWNER_MANUAL' };
     return { ok: true, status: 200, json: async () => body };
   };
@@ -100,6 +100,28 @@ test('active probes are opt-in, read-only GET requests, and preserve manual-work
   assert.ok(calls.every(call => call.options.method === 'GET' && call.options.redirect === 'error'));
   assert.equal(calls.find(call => call.url.endsWith('/state')).options.headers.authorization, 'Bearer fixture-independent-reader');
   assert.equal(JSON.stringify(active).includes('fixture-independent-reader'), false);
+});
+
+// Rule 3: the independent emergency plane must be a real deployment. A simulation-mode
+// instance started with the repository's published demo credentials must not be able to
+// satisfy the probe, even though it answers a well-formed /state body.
+test('the emergency-plane probe rejects a simulation-mode kill service', async () => {
+  const input = good();
+  const fetchImpl = async url => {
+    if (String(url).endsWith('/api/shopify/oauth/callback')) return { ok: false, status: 403, json: async () => ({}) };
+    const body = String(url).endsWith('/health/ready')
+      ? { status: 'ready', persistence: 'available', workspaceBinding: 'verified', runtimeRole: 'non-superuser-no-bypassrls', runtimeDdl: 'denied', killReader: 'reachable' }
+      : String(url).endsWith('/state') ? { engaged: false, mode: 'simulation' }
+        : { status: 'ready', ingressReady: true, workerReady: false, reconciliationReady: true, reconciliationMode: 'OWNER_MANUAL' };
+    return { ok: true, status: 200, json: async () => body };
+  };
+  const result = await runActiveStagingProbes(input, { fetchImpl });
+  const kill = result.results.find(item => item.name === 'INDEPENDENT_KILL_STATE_READER');
+  assert.equal(kill.status, 'BLOCKED');
+  // The whole preflight must fail closed, not merely flag one probe.
+  assert.equal(result.status, 'BLOCKED');
+  // A well-formed response from the wrong emergency plane must never read as external proof.
+  assert.equal(checkStagingReadiness(input).externalStagingVerified, false);
 });
 
 test('active probes block on absent endpoints and reject unsafe URLs without making requests', async () => {

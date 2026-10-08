@@ -122,7 +122,11 @@ export class FileSaver extends MemorySaver {
         });
       }
     });
-    this.saving = save;
+    // A refused write costs exactly that write. Keeping the serialized chain
+    // alive on failure means the next flush runs its own body and reports its
+    // own result, so a transient filesystem fault cannot wedge every later
+    // checkpoint until the process is restarted.
+    this.saving = save.catch(() => {});
     return save;
   }
   override async put(...args: Parameters<MemorySaver["put"]>) {

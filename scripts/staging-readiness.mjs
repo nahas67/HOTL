@@ -124,7 +124,10 @@ export async function runActiveStagingProbes(env, { fetchImpl = fetch, timeoutMs
     { name: 'GUARDRAIL_DATABASE_WORKSPACE_AND_KILL_READER', url: guardrail, headers: {}, check: (response, body) => response.ok && body.status === 'ready' && body.persistence === 'available' && body.workspaceBinding === 'verified' && body.runtimeRole === 'non-superuser-no-bypassrls' && body.runtimeDdl === 'denied' && body.killReader === 'reachable' },
     { name: 'SHOPIFY_INGRESS_AND_RECONCILIATION_MODE', url: ingress, headers: {}, check: (response, body) => response.ok && body.status === 'ready' && body.ingressReady === true && body.reconciliationReady === true },
     { name: 'SHOPIFY_OAUTH_CALLBACK_ROUTE', url: callback, headers: {}, check: response => response.status === 403 },
-    { name: 'INDEPENDENT_KILL_STATE_READER', url: kill, headers: { authorization: `Bearer ${env.KILL_SWITCH_READ_TOKEN}` }, check: (response, body) => response.ok && typeof body.engaged === 'boolean' },
+    // `mode` is returned by the independent kill plane (infra/kill-switch/src/server.ts). A
+    // simulation-mode instance using the repo-published demo credentials would otherwise report
+    // VERIFIED, while this same file blocks that demo token on the local side.
+    { name: 'INDEPENDENT_KILL_STATE_READER', url: kill, headers: { authorization: `Bearer ${env.KILL_SWITCH_READ_TOKEN}` }, check: (response, body) => response.ok && typeof body.engaged === 'boolean' && body.mode === 'live' },
   ];
   const results = await Promise.all(probes.map(async probe => {
     try {
