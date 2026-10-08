@@ -32,6 +32,25 @@ describe('cockpit owner boundary', () => {
     expect(result.status).toBe(409);
     expect(result.data).toMatchObject({ error: { code: 'MARGIN_BELOW_FLOOR' } });
   });
+  it('treats an UNKNOWN provider outcome as a failure, not as success', async () => {
+    // The guardrail returns decision 'unknown' when a provider write may or may not have
+    // landed. Before this was handled, every transport signal -- HTTP 200 and ok:true --
+    // reported a financial operation as completed.
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      decision: 'unknown', operationId: 'op-1', status: 'UNKNOWN', receipt: { outcome: 'UNKNOWN' },
+    }), { status: 200 })));
+    const result = await upstream('http://127.0.0.1:4100', '/shopify/prices/op-1/execute', {}, 'POST', {});
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe(502);
+    expect(result.data).toMatchObject({ error: { code: 'PROVIDER_OUTCOME_UNKNOWN' } });
+    expect((result.data as { error: { message: string } }).error.message).toMatch(/must not be retried blindly/i);
+  });
+  it('does not report an uncertain outcome as a denial either', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ decision: 'unknown' }), { status: 200 })));
+    const result = await upstream('http://127.0.0.1:4100', '/shopify/prices/op-1/execute', {}, 'POST', {});
+    expect(result.status).not.toBe(409);
+    expect((result.data as { error: { code: string } }).error.code).not.toBe('GUARDRAIL_DENIED');
+  });
   it('fails closed on malformed upstream JSON', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('<html>Maintenance</html>', { status: 200 })));
     expect(await upstream('http://127.0.0.1:4100', '/telemetry', {})).toMatchObject({ ok: false, status: 502 });

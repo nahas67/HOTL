@@ -72,7 +72,15 @@ export function registerShopifyRoutes(app: FastifyInstance, engine: GuardrailEng
   app.post(`${base}/prices/propose`, async request => engine.prepareShopifyPrice(request.body, await access.owner(request), access.key(request)));
   app.post(`${base}/prices/:id/cancel`, async request => { const actor = await access.owner(request); return engine.cancelShopifyPrice(id(request), request.body, actor, requestKey(request)); });
   app.post(`${base}/prices/:id/investigations`, async request => { const actor = await access.owner(request); return engine.recordShopifyPriceInvestigation(id(request), request.body, actor, requestKey(request)); });
-  app.post(`${base}/prices/:id/execute`, async request => { const actor = await access.owner(request); empty(request); return required().execute(id(request), actor, requestKey(request)); });
+  app.post(`${base}/prices/:id/execute`, async request => {
+    const actor = await access.owner(request); empty(request);
+    const result = await required().execute(id(request), actor, requestKey(request));
+    // An UNKNOWN outcome means the provider write may or may not have landed. Reporting it as
+    // HTTP 200 would let any transport-level client treat a financial operation as completed.
+    // It is not a denial either, so it is surfaced as 502 rather than 4xx.
+    if ((result as { decision?: string }).decision === 'unknown') throw new GuardrailError('PROVIDER_OUTCOME_UNKNOWN', 'The provider response was lost. The outcome is not known and must not be retried blindly.', 502);
+    return result;
+  });
   app.post(`${base}/prices/:id/reconcile`, async request => { const actor = await access.owner(request); empty(request); return required().reconcile(id(request), actor, access.key(request)); });
   app.post(`${base}/worker`, async request => {
     const actor = await access.owner(request); empty(request); requestKey(request);

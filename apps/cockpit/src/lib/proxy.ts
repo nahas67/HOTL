@@ -78,5 +78,18 @@ export async function upstream(base: string, path: string, headers: HeadersInit,
       code: denial.reason ?? 'GUARDRAIL_DENIED', message: conflictMessage ?? denial.error?.message ?? `Guardrail denied this request: ${(denial.reason ?? 'a required boundary was not met').replaceAll('_', ' ').toLowerCase()}.`, details: data,
     } } };
   }
+  // An UNCERTAIN outcome is not a success. The guardrail returns `decision: 'unknown'`
+  // when a provider write may or may not have landed (for example a lost response). The body
+  // is honest, but every transport-level signal -- HTTP 200 and `ok: true` -- would otherwise
+  // report a financial operation as completed. It is surfaced as 502 so no caller, including
+  // a UI that closes its dialog on any 2xx, treats it as done. It must never be treated as a
+  // denial either: the outcome is unknown, not refused.
+  if (data && typeof data === 'object' && 'decision' in data && data.decision === 'unknown') {
+    return { ok: false, status: 502, data: { error: {
+      code: 'PROVIDER_OUTCOME_UNKNOWN',
+      message: 'The provider response was lost. The outcome is not known and must not be retried blindly; resolve it before acting again.',
+      details: data,
+    } } };
+  }
   return { ok: response.ok, status: response.status, data, setCookie: response.headers.get('set-cookie') };
 }

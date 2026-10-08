@@ -278,7 +278,18 @@ A replayed result is returned with `replayed: true`. Behaviour is unchanged — 
 
 The audit also proposed re-keying the idempotency map per actor and operation, so that one actor's rejected request could not block another's key. **This was implemented, then reverted on review.** `state.idempotency` is part of the durable ledger; re-keying it makes every record written by an earlier version unreachable on upgrade, and a replayed financial request would then execute a second time. Losing replay protection is a safety failure; cross-actor key squatting is an availability annoyance. The key format is unchanged and the reason is recorded at the call site so it is not "fixed" later by someone who misses the migration.
 
-### 0.6.14 Open, deferred
+### 0.6.15 An uncertain outcome no longer reports as success
+
+When a provider write's response is lost, the guardrail returns `decision: 'unknown'` with `status: 'UNKNOWN'` and a receipt. The body was honest, but **every transport-level signal said success**: the route returned HTTP 200, and the cockpit proxy — which downgraded only `decision === 'deny'` — returned `ok: true`, so any client keying on status treated a financial operation as completed.
+
+Both boundaries now refuse to call it success:
+
+- `shopify-routes.ts` raises `PROVIDER_OUTCOME_UNKNOWN` (502) rather than returning 200.
+- `apps/cockpit/src/lib/proxy.ts` classifies `decision: 'unknown'` as `ok: false`, 502, with a message stating the outcome is not known and must not be retried blindly.
+
+It is deliberately **not** mapped to a denial. An uncertain outcome is unknown, not refused, and conflating the two would let an operator conclude nothing happened when a write may have landed. Two tests in `apps/cockpit/src/lib/proxy.test.ts` cover both properties, including that it is not reported as a denial. **Verified they bite**: reverting the proxy change fails 2 of 35.
+
+### 0.6.16 Open, deferred
 
 Recorded so the register is complete. None is claimed as done.
 
