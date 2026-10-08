@@ -65,3 +65,31 @@ test('the gitleaks allowance stays scoped to one reviewed test file', () => {
   assert.equal(allowances.length, 1, 'exactly one allowance may name the reviewed fixture path');
   assert.ok(!/paths\s*=\s*\[\s*'''''/.test(config), 'a wildcard allowance path is never acceptable');
 });
+
+// The 2026-10-09 audit found apps/commerce-core/medusa: 25 safety tests guarding the only
+// path from a Medusa refund to an unguarded provider call, in no workspace, no lint scope and
+// no pipeline. They passed when run by hand and had never run automatically. The CI step fixes
+// today; this assertion stops the whole class of defect from recurring silently.
+test('every package declaring tests is either a workspace member or exercised by CI', () => {
+  const workspace = readFileSync(resolve(repoRoot, 'pnpm-workspace.yaml'), 'utf8');
+  const workflow = readFileSync(resolve(repoRoot, '.github', 'workflows', 'ci.yml'), 'utf8');
+  const patterns = [...workspace.matchAll(/^\s*-\s*(\S+)\s*$/gm)].map(match => match[1])
+    .map(pattern => new RegExp(`^${pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\\\*/g, '[^/]+')}$`));
+  const manifests = execFileSync('git', ['ls-files', '*/package.json', '*/*/package.json'], {
+    cwd: repoRoot, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024,
+  }).split('\n').filter(Boolean);
+
+  const orphans = [];
+  for (const manifest of manifests) {
+    if (manifest === 'package.json') continue;
+    const directory = manifest.slice(0, -'/package.json'.length);
+    let scripts;
+    try { scripts = JSON.parse(readFileSync(resolve(repoRoot, directory, 'package.json'), 'utf8')).scripts ?? {}; }
+    catch { continue; }
+    if (!scripts.test) continue;
+    const inWorkspace = patterns.some(pattern => pattern.test(directory));
+    const exercisedByCI = workflow.includes(directory);
+    if (!inWorkspace && !exercisedByCI) orphans.push(directory);
+  }
+  assert.deepEqual(orphans, [], `packages with tests that no automatic gate runs: ${orphans.join(', ')}`);
+});

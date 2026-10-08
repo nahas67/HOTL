@@ -89,18 +89,11 @@ export class RunManager {
         );
       const config = { configurable: { thread_id: runId }, recursionLimit: 300 };
       const snapshot = await this.graph.getState(config);
-      if (
-        !snapshot.values?.runId &&
-        ["run-support-01", "run-marketing-01", "run-sourcing-01"].includes(
-          runId,
-        )
-      )
-        return {
-          runId,
-          status: "resolved",
-          seeded: true,
-          message: "The sample approval is resolved; it has no live graph run.",
-        };
+      // A run with no saved checkpoint has no authority to resume. This previously returned a
+      // fabricated "resolved, seeded" success for three hard-coded demo run ids, which reports
+      // an approval as resolved for a run that does not exist (rule 7). Demo ids are just ids.
+      if (!snapshot.values?.runId)
+        throw new RunError("This run has no saved checkpoint.", 404);
       const current = await this.get(runId);
       if (current.resolvedInterruptIds.includes(interruptId)) return current;
       if (current.interruptId !== interruptId)

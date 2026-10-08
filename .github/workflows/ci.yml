@@ -21,6 +21,18 @@ jobs:
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test
+      # apps/commerce-core/medusa is an isolated npm project outside the pnpm workspace.
+      # It holds the guarded-payment failure-rejection matrix -- the only thing between a
+      # Medusa refund and an unguarded provider call -- and it ran in no pipeline at all
+      # until this step existed. tests/repository-hygiene.test.mjs fails the build if this
+      # subproject is ever orphaned again.
+      - name: Guarded Medusa payment bridge
+        working-directory: apps/commerce-core/medusa
+        run: npm ci && npm test
+      # Also an isolated npm project with no dependencies, and likewise outside the workspace.
+      - name: Owner console site tests
+        working-directory: sites/hotl-owner-console
+        run: npm test
       - run: pnpm build
       - name: Install browser for application checks
         run: pnpm exec playwright install --with-deps chromium

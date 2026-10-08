@@ -73,6 +73,30 @@ describe('real LangGraph and real guardrail HTTP integration', () => {
     expect((await manager.start('daily', 'run-while-paused')).status).toBe('halted');
     const state = await engine.snapshot(); expect(state.campaigns).toHaveLength(0); expect(state.refunds).toHaveLength(0); expect(state.supplierOrders).toHaveLength(0);
   });
+  // Rule 7: unreachable emergency state must DENY, never be treated as "not engaged".
+  // Every fixture above stubs a reader that succeeds, so this branch -- the one the rule
+  // actually depends on -- had never executed. A throw is what an unreachable independent
+  // emergency plane looks like, and it must be indistinguishable from "stop".
+  it('halts when the emergency reader is unreachable instead of assuming not engaged', async () => {
+    const engine = await createEngine({ killSwitchReader: async () => { throw new Error('Emergency stop unavailable'); } });
+    const server = await createServer({ engine, mode: 'simulation', internalToken: 'test-token' });
+    await server.listen({ port: 0, host: '127.0.0.1' }); resources.push(() => server.close());
+    const address = server.server.address(); if (!address || typeof address === 'string') throw new Error('No test port');
+    const gateway = new HttpGuardrails(`http://127.0.0.1:${address.port}`, 'test-token');
+    const manager = new RunManager(createCommerceGraph(gateway, new MemorySaver()), gateway);
+    const before = await engine.snapshot();
+    const run = await manager.start('daily', 'run-emergency-unreachable');
+    expect(run.status).toBe('halted');
+    const after = await engine.snapshot();
+    expect(after.campaigns).toHaveLength(0);
+    expect(after.refunds).toHaveLength(0);
+    expect(after.supplierOrders).toHaveLength(0);
+    // Denials are audited rather than dropped, so the ledger grows. What must never appear
+    // is an audited *allow*: nothing was authorised while the emergency plane was unreadable.
+    const appended = after.audit.slice(before.audit.length);
+    expect(appended.length).toBeGreaterThan(0);
+    expect(appended.every(entry => (entry as { result?: { decision?: string } }).result?.decision !== 'allow')).toBe(true);
+  });
   it('restores an interrupted graph from disk and resumes after a service restart', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'hotl-graph-')); resources.push(() => rm(directory, { recursive: true, force: true }));
     const file = join(directory, 'checkpoints.json');

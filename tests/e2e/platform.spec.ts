@@ -50,7 +50,10 @@ test('pause blocks checkout and resumes through the owner control', async ({ pag
 test('below-margin approval is denied in the UI and cannot resume a graph', async ({ page, request }) => {
   const approvals = await request.get('http://127.0.0.1:4100/api/interrupts', { headers: { 'x-hotl-internal-token': 'hotl-local-development-token' } });
   const pending = (await approvals.json()).interrupts.find((item: { id: string; status: string }) => item.id === 'int-margin-01' && item.status === 'pending');
-  test.skip(!pending, 'Seeded approval already resolved in this local workspace.');
+  // Fail, never skip. If this fixture is absent the browser-level proof that a below-margin
+  // approval is refused would silently disappear and the suite would still report green --
+  // the same defect class as the alert locator and the pg_isready gate already fixed.
+  expect(pending, 'the seeded below-margin approval must be pending for this drill').toBeTruthy();
   await page.goto('/');
   await page.getByRole('button').filter({ hasText: 'New product below margin floor' }).click();
   await page.getByPlaceholder('Share the reason for your decision...').fill('Browser test: guardrails must still reject this request.');
