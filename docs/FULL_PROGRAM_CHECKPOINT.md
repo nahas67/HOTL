@@ -2,9 +2,9 @@
 
 **Prepared:** 2026-10-08 (supersedes the October 1 snapshot anchored at `8ccf7b5`)
 **Repository:** https://github.com/nahas67/HOTL
-**Base branch/head at review:** `main` @ `1de2ad36793258db201aac21f04fdd48d4a0681f`
+**Base branch/head at review:** `main` @ `1de2ad36793258db201aac21f04fdd48d4a0681f` → **merged to `main` @ `47f1032`** (PR #3)
 **Prior checkpoint preserved at:** [`docs/checkpoints/HOTL_FULL_CHECKPOINT_2026-10-08_ORIGINAL.md`](checkpoints/HOTL_FULL_CHECKPOINT_2026-10-08_ORIGINAL.md) — SHA-256 `ba2bac52…c852e2`, byte-identical to the copy supplied with this session.
-**Prior audit superseded:** [`docs/MASTER_CHECKPOINT_2026-10-08.md`](MASTER_CHECKPOINT_2026-10-08.md) (branch `audit/hotl-checkpoint-2026-10-08`, open PR #1).
+**Prior audit superseded:** an earlier audit existed only on branch `audit/hotl-checkpoint-2026-10-08` (PR #1), which closed **unmerged**, so its file is **not on `main`**. This document carries forward every still-valid finding from it.
 
 **This is an evidence register, not a production authorization.** Nothing here promotes a gate. No simulated result is provider proof.
 
@@ -112,6 +112,13 @@ Scan git history and working tree for credentials ........ success   (new)
 This is materially better than any previous run on this repository. Run `37753604085` failed at the browser step and **skipped both PostgreSQL drills**, so until now the migration/RLS and runtime-ledger evidence has never actually run in CI on a green build. It now does, and the credential scan runs on every push and pull request.
 
 **`main` is still red until this branch is merged** — the default branch has not been changed by this session.
+
+### 0.2.3 Merged to `main`, and `main` protected
+
+- **PR #3 merged** to `main` at `47f1032` (2026-10-08T18:31:54Z), on owner authorization. `main` now carries the credential containment, the archive remediation, both CI repairs, the CI-enforced credential scan, and this checkpoint.
+- **PR #1 closed unmerged** (it auto-closed when its base advanced); its audit file is not on `main`, and this register supersedes it.
+- **PR #2 left open** on owner decision. Its one-line e2e fix is already contained in `main` via `5ce77af`, so it is now redundant and can be closed at the owner's convenience.
+- **`main` branch protection enabled** on owner authorization: the `validate` status check must pass, one approving review is required, and force-push and deletion are blocked. Consequence: direct pushes to `main` are now rejected and further changes go through pull requests.
 
 ### 0.3 Credential review — first real result (NEW)
 
