@@ -232,7 +232,39 @@ The 2026-10-09 QA audit found that §0.1 claimed `--force / 0 cached` for typech
 
 The auditors independently traced and confirmed, rather than assumed: the one-way kill latch has no disengage path and is enforced at both service and database layer; the runtime ledger's cross-workspace isolation is genuinely binding for a non-owner role; audit-before-success is atomic on both stores; provider POSTs are never retried; compensation requires fresh authority; MANUAL mode executes nothing; and the replan bound caps any stage at three executions. **These are not findings and were not "fixed".**
 
-### 0.6.9 Open, deferred
+### 0.6.9 The kill-switch ↔ guardrail HTTP seam — previously untested, now proven
+
+The guardrail and the kill switch are, by design, **independently deployed with independent credentials**. The code connecting them over HTTP (`apps/guardrail-service/src/server.ts:26-28`) was constructed by **no test in the repository**: all 20 `createServer({...})` call sites pass an explicit `engine:`, so every kill-denial test injected a lambda instead.
+
+`apps/guardrail-service/test/kill-switch-seam.test.ts` now starts the **real** `createKillSwitch()` and drives the **real** reader closure — 6 cases: healthy and unengaged acts normally; engaged denies; wrong read token denies `KILL_SWITCH_UNAVAILABLE`; a stopped plane denies; a well-formed body with no `engaged` field denies; and no configured token appears in any response.
+
+**Verified that these detect real defects**, by temporarily breaking the production reader:
+
+| Injected defect | Result |
+| --- | --- |
+| `/state` path changed to `/wrong-path` | tests fail |
+| `Authorization` header removed from the reader | the healthy-path case fails |
+| none (restored) | 6/6 pass |
+
+### 0.6.10 Commerce mutations are now bound to scope and policy
+
+`checkout()` and `commerceEvent()` called only `block()`, inheriting **no engine-level authorization**: no scope check and no Constitution-version binding. Verified before the fix — an agent holding only `listing`/`runs`/`context` could create an order, decrement inventory and raise `baseOrders` with zero approval. Both now pass through `scope()` and `context()`; `order_agent` is recorded as the commerce scope holder, matching the HTTP route's existing `requireAccess(request,'commerce')`. Owner and storefront callers are unaffected because the version fields are optional in the schema and required only for agents.
+
+`apps/guardrail-service/test/engine-authorization.test.ts` — 5 cases. **Verified they bite**: with the gate removed, 3 fail; restored, all 5 pass.
+
+### 0.6.11 Synthetic telemetry is separated from measured data
+
+`telemetry()` returned a hardcoded `margin`, `marginChange`, `revenueChange`, `ordersChange` and a synthetic chart interleaved with real ledger values under the same `metrics` key, so no consumer could tell measured from invented. `metrics` now holds **only** ledger-derived values; everything fabricated moved to a labelled `synthetic` block carrying its own note. The cockpit was updated to read the new shape and labels those tiles *"Illustrative trend, not observed"*.
+
+### 0.6.12 Replays are now distinguishable from fresh authority
+
+A replayed result is returned with `replayed: true`. Behaviour is unchanged — the action is still not re-run and stop conditions are still not re-evaluated on that path — but the caller can no longer mistake recorded history for fresh permission. Twenty existing replay assertions were updated to expect the marker, which makes them **strictly stronger** than the previous deep-equality checks.
+
+### 0.6.13 A proposal deliberately rejected
+
+The audit also proposed re-keying the idempotency map per actor and operation, so that one actor's rejected request could not block another's key. **This was implemented, then reverted on review.** `state.idempotency` is part of the durable ledger; re-keying it makes every record written by an earlier version unreachable on upgrade, and a replayed financial request would then execute a second time. Losing replay protection is a safety failure; cross-actor key squatting is an availability annoyance. The key format is unchanged and the reason is recorded at the call site so it is not "fixed" later by someone who misses the migration.
+
+### 0.6.14 Open, deferred
 
 Recorded so the register is complete. None is claimed as done.
 
@@ -240,10 +272,11 @@ Recorded so the register is complete. None is claimed as done.
 - Idempotency keys share one flat namespace and denials consume them.
 - Replayed historical `allow` is returned with no `replayed` marker.
 - `telemetry()` serves fabricated margin/chart with no provenance marker.
-- Webhook intake is bound to the app secret but not to an installation (cross-installation replay verified).
-- Orchestrator: stale `interruptId`, shipped test fixture in `manager.ts:91-103`, refund-policy reimplementation that has drifted from the guardrail, owner binding on read/resume.
-- `apps/commerce-core/medusa` (25 safety tests) is in no pipeline; the kill-switch↔guardrail HTTP seam has no test; the storefront origin check has no test.
-- `tests/e2e/platform.spec.ts:52` can silently skip a safety assertion.
+- Webhook intake is bound to the app secret but not to an installation (cross-installation replay verified). The installation-bound MAC design was approved — there are no live subscriptions, so the breaking-change cost is zero today — but not implemented.
+- Orchestrator: stale `interruptId`, refund-policy reimplementation that has drifted from the guardrail, owner binding on read/resume, and the rule-1 "model output can never enter an authorization body" sentinel test.
+- `decision: 'unknown'` still crosses the HTTP boundary as **200 / `ok: true`**, so a lost provider response reads as success at the transport level even though the body is honest.
+- Shopify: readiness endpoint overstates ingress/reconciliation state; empty-extension loss is silently accepted; attempts-exhausted path now clears its claim.
+- `apps/storefront` origin/CSRF check has no test, and derives its expected origin from the request's own `Host` header when unconfigured.
 
 ## 0.1.1 Runtime-ledger drill — measured recovery evidence
 
