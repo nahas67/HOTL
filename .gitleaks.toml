@@ -1,0 +1,31 @@
+# HOTL gitleaks configuration — 2026-10-08
+#
+# Purpose: keep the credential scan deterministic in CI without weakening it.
+# Every allowance below is a verified false positive, not an unreviewed exception.
+# Evidence: evidence/supply-chain-review-2026-10-08/README.md
+#
+# Full-history scan (20 commits, 2.87 MB) produced exactly two findings, both
+# `generic-api-key` matches on literal `idempotencyKey` test fixtures. Neither
+# value is a credential: they are request de-duplication keys asserted by the
+# guarded-payment bridge tests. They are still present at HEAD.
+
+title = "HOTL gitleaks configuration"
+
+[extend]
+useDefault = true
+
+# Build and simulation output is generated, git-ignored, and never a credential
+# source. It is also where the 2026-10-08 local PAT exposure was found: the
+# turbopack cache serialized `GITHUB_MCP_TOKEN` from the build environment.
+[[allowlists]]
+description = "Generated, git-ignored build and simulation output"
+paths = [
+  '''(^|/)(\.next|\.data|\.medusa|node_modules|artifacts|test-results|playwright-report|\.turbo|dist|\.sites-checkout)/''',
+]
+
+# Scoped to one test file only. Never widen this to a directory or a rule.
+# The leading `(^|/)` matters: `gitleaks git` reports repository-relative paths while
+# `gitleaks dir` reports the filesystem path, and both run in CI.
+[[allowlists]]
+description = "guarded-payments.test.ts literal idempotency keys are de-duplication fixtures, not credentials"
+paths = ['''(^|/)apps/commerce-core/medusa/test/guarded-payments\.test\.ts$''']

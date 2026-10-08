@@ -30,4 +30,12 @@ jobs:
         run: bash infra/scripts/test-database.sh
       - name: Validate runtime ledger and guardrail engine on disposable Postgres
         run: bash infra/scripts/test-runtime-ledger.sh
+      - name: Scan git history and working tree for credentials
+        # Same tool, version, and invocation used for the 2026-10-08 local review, so a
+        # local pass and a CI pass mean the same thing. Findings are redacted in logs.
+        run: |
+          docker run --rm -v "$PWD:/repo" -w /repo zricethezav/gitleaks:v8.28.0 \
+            git /repo --redact --no-banner --config /repo/.gitleaks.toml
+          docker run --rm -v "$PWD:/repo" -w /repo zricethezav/gitleaks:v8.28.0 \
+            dir /repo --redact --no-banner --config /repo/.gitleaks.toml
 # No deploy credentials or kill-switch deploy actions belong in this workflow.
