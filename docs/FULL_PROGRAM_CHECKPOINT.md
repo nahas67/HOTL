@@ -587,23 +587,30 @@ timing effect that was not identified. Shipping a change that makes the suite re
 the rejections, which would hide exactly the signal that matters — was not acceptable, so the
 attempt was withdrawn and `main` left green.
 
-**What a future attempt must do differently — the mechanism, not just the guard.** The diagnosis
-from round 6 is specific: the refusal is *correct*, but throwing from `FileSaver.flush()` is not
-safe in this codebase, because **the saver's contract assumes every caller awaits every write and
-LangGraph does not guarantee that**. A refused `put`/`putWrites` therefore becomes an **unhandled
-rejection** whenever the graph issues a checkpoint write it does not await. This is the same
-failure shape as the checkpoint-poisoning defect fixed earlier: the saver is not the only owner
-of the write outcome.
+**Two fix attempts were made and withdrawn.** Both established real facts; neither could be shipped.
 
-So a next attempt should not simply re-add `throw` inside `flush()`. Either:
+*Attempt 1* — optimistic concurrency control in `flush()`: an exclusive `.writelock` recording
+`process.pid`, reclaiming only a provably dead owner (the ledger and kill-journal rule), refusing
+when the file on disk differs from the bytes this writer last read or wrote. **Verified working in
+isolation** — the probe showed the refusal, and both multi-instance tests failed again when the
+staleness check was removed. Run together it produced **24 unhandled rejections**.
 
-- the saver records the refusal as durable state and surfaces it at the next **awaited** boundary
-  (a `put` the caller does await), so nothing is ever thrown into an unobserved promise; or
-- `RunManager`/graph-level error handling absorbs refused writes explicitly, making the saver's
-  refusal observable through the run result instead of the promise.
+*Attempt 2* — the diagnosis in the previous section, acted on: `flush()` no longer throws for a
+staleness refusal. It records the refusal and surfaces it from `put()`, which callers do await.
+Result: **19 unhandled rejections**, and now provably **not** caused by the staleness path, because
+that path no longer throws at all.
 
-Until one of those is designed and tested, adding the throw makes the suite red. That is why the
-attempt was withdrawn rather than tuned.
+**What the two attempts together prove.** `put()` is *also* reached un-awaited by the graph, so
+**neither** placement — throwing from `flush()` nor deferring to `put()` — avoids surfacing a
+refusal as an unhandled rejection. The saver is the wrong place to own this outcome entirely.
+
+**Therefore the fix must move up a layer.** The refusal has to be owned by `RunManager`/graph-level
+error handling, with the saver exposing the conflict as state rather than as a promise rejection.
+That is a real design change with its own tests, and it was not attempted blind. No source change
+is committed; the suite is green at 46/46.
+
+This is unfinished work with a now-well-characterised cause, not a rejected idea. Two attempts
+without new information would have been churn, so it stops here.
 
 ### 0.7.10 D3 — unlocked ledger reads. OBSERVATION, not reproduced
 

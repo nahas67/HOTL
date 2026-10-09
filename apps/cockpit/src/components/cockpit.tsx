@@ -2355,6 +2355,8 @@ function ApprovalDialog({
   const [review, setReview] = useState<{
     policy: ConstitutionResponse;
     telemetry: Telemetry;
+    serviceProposals: number | null;
+    serviceRevisionCount: number;
   } | null>(null);
   const [reviewError, setReviewError] = useState("");
   const [reviewed, setReviewed] = useState(false);
@@ -2363,18 +2365,28 @@ function ApprovalDialog({
     setReviewed(false);
     setReviewError("");
     try {
-      const [policy, telemetry] = await Promise.all([
+      // `operating-state` is the service's own view of pending proposals and resource
+      // revisions. The legacy-review derivation below infers freshness from telemetry; the
+      // service already reports it authoritatively, so fetch both and show which is which
+      // rather than presenting a reconstruction as if it came from the ledger.
+      const [policy, telemetry, operating] = await Promise.all([
         api("constitution"),
         api("telemetry"),
+        api("operating-state"),
       ]);
       legacyReviewContext(
         item,
         (policy as unknown as ConstitutionResponse).constitution.version,
         telemetry as unknown as Telemetry,
       );
+      const revisions = (operating as { resourceRevisions?: Record<string, Record<string, number>> }).resourceRevisions ?? {};
       setReview({
         policy: policy as unknown as ConstitutionResponse,
         telemetry: telemetry as unknown as Telemetry,
+        serviceProposals: Array.isArray((operating as { proposals?: unknown[] }).proposals)
+          ? ((operating as { proposals: unknown[] }).proposals).length
+          : null,
+        serviceRevisionCount: Object.keys(revisions).reduce((sum, group) => sum + Object.keys(revisions[group] ?? {}).length, 0),
       });
     } catch (error) {
       setReviewError(
@@ -2523,6 +2535,21 @@ function ApprovalDialog({
                   Refresh review context
                 </Button>
               </div>
+              {review && (
+                <div className="metric-context">
+                  <span className="neutral">
+                    Reported by the guardrail:{" "}
+                    {review.serviceProposals ?? 0} pending proposal
+                    {review.serviceProposals === 1 ? "" : "s"},{" "}
+                    {review.serviceRevisionCount} resource revision
+                    {review.serviceRevisionCount === 1 ? "" : "s"} tracked
+                  </span>
+                  <small>
+                    Ledger-reported. The comparison below is derived client-side from
+                    telemetry and is shown separately so it is not mistaken for it.
+                  </small>
+                </div>
+              )}
             </section>
           )}
           {pending && (
