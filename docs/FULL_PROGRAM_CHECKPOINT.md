@@ -551,7 +551,7 @@ Recovery is never inferred from age.
 `apps/guardrail-service/test/lock-recovery.test.ts` — 4 cases. **Verified it bites**: removing the
 recovery fails the dead-owner case while all three fail-closed cases still pass.
 
-### 0.7.9 D1 — orchestrator checkpoint writers have no mutual exclusion. OPEN
+### 0.7.9 D1 — orchestrator checkpoint writers have no mutual exclusion. OPEN, fix ATTEMPTED AND REVERTED
 
 `checkpointer.ts` `flush()` rewrites the instance's **entire** in-memory storage and renames it
 over the shared file, with no lock, no read-merge and no conflict detection. Measured behaviour:
@@ -562,17 +562,35 @@ after A: ['t1','t3']  <- t2 destroyed
 fresh reader sees t2: false
 ```
 
-This is **total last-writer-wins across the whole thread set**, not merely threads the second
-instance never saw: two live workers destroy each other's checkpoints on **every write**. An owner
-can find a run gone and `get()` rejects with 404 after a restart.
+**Total last-writer-wins across the whole thread set**, not merely threads the second instance
+never saw: two live workers destroy each other's checkpoints on **every write**. An owner can
+find a run gone and `get()` rejects 404 after a restart.
 
 **It is not a double-spend.** The financial defence is guardrail idempotency on a deterministic
 action key, already proven by `graph.test.ts` ("replays the saved action key after a response is
-lost across a checkpoint restart"). This is an **availability and auditability** failure.
-Production is protected today only by the single-process topology and by `createCheckpointer()`
-refusing to build a `FileSaver` outside simulation without `DATABASE_URL` — a correct guard worth
-keeping. `checkpoint-multi-instance.test.ts` is a permanent witness: **it will fail when a fix
-lands**, and that is intentional.
+lost across a checkpoint restart"). This is **availability and auditability**. Production is
+protected today only by the single-process topology and by `createCheckpointer()` refusing to
+build a `FileSaver` outside simulation without `DATABASE_URL` — a correct guard worth keeping.
+`checkpoint-multi-instance.test.ts` is a permanent witness that **documents the current loss**.
+
+**A fix was implemented and then reverted.** Optimistic concurrency control was added: `flush()`
+takes an exclusive `.writelock` (recording `process.pid`, reclaiming only a provably dead owner,
+matching the ledger and kill-journal locks), and refuses when the file on disk differs from the
+bytes this writer last read or wrote. In isolation this worked exactly as intended — the probe
+showed `b.put REJECTED: Checkpoint file changed since this writer last read it`, and both
+multi-instance tests passed while failing again when the staleness check was removed.
+
+**It was reverted because it could not be fully verified.** Run together, the orchestrator suite
+passed all 46 tests but emitted **24 unhandled rejections** of the new refusal error, which fails
+the package task. Each spec passes cleanly in isolation, so the interaction is a cross-spec or
+timing effect that was not identified. Shipping a change that makes the suite red — or suppressing
+the rejections, which would hide exactly the signal that matters — was not acceptable, so the
+attempt was withdrawn and `main` left green.
+
+**What a future attempt should do:** establish where the unhandled rejections originate (most
+likely an unawaited `flush()` reached through a `RunManager` path) before adding the guard. The
+diagnosis, the mechanism, the tests and the measurement are all preserved here and in the
+reverted commit's design; this is unfinished work, not a rejected idea.
 
 ### 0.7.10 D3 — unlocked ledger reads. OBSERVATION, not reproduced
 
