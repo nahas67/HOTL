@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { constitutionPatchSchema, pilotApprovalRequestSchema, productCreateSchema, productUpdateSchema, refundSchema } from '@hotl/schemas';
+import { configPatchSchema, constitutionPatchSchema, pilotApprovalRequestSchema, productCreateSchema, productUpdateSchema, refundSchema } from '@hotl/schemas';
 import { assertSameOrigin, integrationCreateSchema, integrationCredentialsSchema, integrationDisconnectSchema, integrationRevisionSchema, ownerHeaders, resolveSchema, simulationEnabled, upstream } from '@/lib/proxy';
 import { shopifyCookie, shopifyMutationSchema } from '@/lib/shopify-proxy';
 
@@ -55,6 +55,17 @@ async function handle(request: Request, context: { params: Promise<{ path: strin
       result = await upstream(guardrail, `${prefix}/integrations/${encodeURIComponent(path[1])}/${path[2]}`, headers, 'POST', schema.parse(await request.json()));
     } else if (route === 'config' && request.method === 'GET') {
       result = await upstream(guardrail, `${prefix}/guardrails/config`, auth);
+    } else if (route === 'config' && request.method === 'PATCH') {
+      // Owner-only, and the guardrail re-checks it. Previously GET-only, so the ceiling and
+      // margin floor could be read but never changed from the cockpit.
+      result = await upstream(guardrail, `${prefix}/guardrails/config`, headers, 'PATCH', configPatchSchema.parse(await request.json()));
+    } else if (route === 'campaigns' && request.method === 'GET') {
+      result = await upstream(guardrail, '/api/campaigns', auth);
+    } else if (path.length === 3 && path[0] === 'campaigns' && path[2] === 'pause' && request.method === 'POST') {
+      result = await upstream(guardrail, `${prefix}/campaigns/${encodeURIComponent(path[1])}/pause`, headers, 'POST', z.object({ reason: z.string().trim().min(10).max(1000), expectedConstitutionVersion: z.number().int().positive() }).strict().parse(await request.json()));
+    } else if (route === 'shopify/webhooks/health' && request.method === 'GET') {
+      // Public, non-secret readiness for the independent webhook ingress.
+      result = await upstream(guardrail, '/api/shopify/webhooks/health', auth);
     } else if (route === 'pause' && ['POST', 'DELETE'].includes(request.method)) {
       result = await upstream(guardrail, `${prefix}/pause/${request.method === 'POST' ? 'engage' : 'release'}`, headers, 'POST', { reason: 'Owner cockpit control' });
     } else if (route === 'runs' && request.method === 'POST') {
