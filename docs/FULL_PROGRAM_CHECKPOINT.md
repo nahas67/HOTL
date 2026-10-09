@@ -457,7 +457,60 @@ and `GET /api/operating-state` (pending proposals with `requiredAction`, plus re
 were already proxied and working but **never called by any UI surface**. They still need
 surfacing; the cockpit currently rebuilds that freshness context by hand.
 
-### 0.7.3 A regression the drills caught, and green tests did not
+### 0.7.4 UI honesty and accessibility defects — closed this round
+
+Four of the audit's findings are fixed against `main` and verified (`516f524`):
+
+- **The revenue chart no longer claims to be measured.** It renders `telemetry().synthetic`
+  verbatim via `synthetic.note`, and its `aria-label` announces the figure as illustrative
+  rather than as revenue. Previously it showed **$20,773.00** captioned *"Measured progress"*
+  beside a real **Total revenue $24,782** on the same screen.
+- **The ad-spend card is derived, not hardcoded.** It said **"Within budget"** unconditionally,
+  including beside "$0.00 remaining" against an exhausted ceiling. It now reports the ceiling
+  being exceeded when it is.
+- **Approve is disabled while the platform is paused**, matching every other financial control.
+  Reject stays enabled deliberately — the guardrail skips `block()` for rejections, so it can
+  still succeed.
+- **The Approve/Reject/Modify group is now a labelled group with `aria-pressed` per option**, so
+  the armed decision is conveyed programmatically instead of by a CSS class alone.
+
+**Two of my own attempts were wrong and were corrected rather than shipped:**
+
+1. My first accessibility fix set `role="radio"` on the buttons. That **overrides the button
+   role** and silently broke `getByRole('button', { name: 'Reject' })`, timing out the LangGraph
+   cycle test. The e2e suite is the contract, so the options remain buttons carrying
+   `aria-pressed` — which still fixes the actual defect (selection conveyed only by CSS).
+2. My responsive fix **did nothing**. Adding `max-width`/`min-width` to `.table-scroll` left
+   `/products` at 671 px and `/orders` at 587 px, identical before and after, so it was
+   reverted rather than left in as cargo cult.
+
+### 0.7.5 Responsive defect — still OPEN, now measured and covered
+
+The `/products` and `/orders` horizontal overflow is **not fixed**. Measured with
+`waitUntil: 'networkidle'`:
+
+| Width | Route | `document.scrollWidth` | `body.scrollWidth` | viewport |
+| --- | --- | --- | --- | --- |
+| 360 | `/products` | **671** | 360 | 360 |
+| 360 | `/orders` | **587** | 360 | 360 |
+| 390 | `/products` | **677** | 390 | 390 |
+| 390 | `/orders` | **593** | 390 | 390 |
+
+All eight other routes measure exactly their viewport at both widths. The overflow escapes
+`body`, so constraining `.table-scroll` has no effect and the cause is still unidentified.
+
+**A measurement trap is recorded here because it nearly produced false evidence.** My first
+regression test used `waitUntil: 'domcontentloaded'`, which measures before hydration renders the
+page — every route then reported exactly its viewport width and the test **passed against the
+defect it was written to catch**. It passed identically before and after the CSS change, which is
+how the useless change was caught rather than shipped.
+
+`tests/e2e/responsive-overflow.spec.ts` now measures with `networkidle`, sweeps **all ten routes**
+at **360 px and 390 px** so a third route breaking is caught, and names the two known-bad routes in
+`KNOWN_DEFECT_ROUTES`. **Deleting a route from that list makes the sweep fail immediately on it** —
+that is the intended fix mechanism, not a way to make the test green.
+
+### 0.7.6 Open, deferred
 
 The replay marker added earlier broke six assertions in `postgres-store.test.ts`. That file is
 guarded by `describe.skipIf`, so **26 of its cases never run in the normal suite** — they execute
