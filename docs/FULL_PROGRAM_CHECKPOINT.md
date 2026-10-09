@@ -672,7 +672,53 @@ the test was wrong — verified by probing the real DOM rather than "fixing" the
 
 Full suite green with 0 cached. **e2e 18/18** (11 original + 7 added this session).
 
-### 0.8.1 Open, deferred
+### 0.9.1 The "1-in-3 e2e flake" is NOT a flaky test — it is a service crash
+
+Long recorded as an unexplained intermittent `POST /api/runs -> 503`. **Root-caused this round,
+and it is a different problem than anyone assumed.**
+
+The Playwright log carries the evidence that was never read:
+
+```text
+[WebServer] orchestrator exited (1). Stopping local stack.
+Error: apiRequestContext.get: connect ECONNREFUSED 127.0.0.1:4100
+Error: page.goto: net::ERR_CONNECTION_REFUSED at http://127.0.0.1:3000/...
+```
+
+`scripts/dev.mjs` supervises all services and **tears down every child when one exits**. So the
+orchestrator process **crashes with exit code 1**, which kills the guardrail and cockpit too, and
+every subsequent test fails instantly with `ECONNREFUSED` in ~780 ms.
+
+That inverts the earlier reading. The suite was never "sometimes flaky": it was **crashing a
+service and reporting the cascade as failures**, which is why one fault presented as six or nine
+independent defects. It also means a red run is not 6–9 problems, it is **one crash plus noise**.
+
+**What was ruled out by measurement, not assumption:**
+
+| Hypothesis | Experiment | Result |
+| --- | --- | --- |
+| Emergency-plane read times out (2,500 ms budget) | 40 consecutive `GET /api/status` | **0 failures, p50 8 ms, p95 11 ms, max 68 ms** — a 36× margin. Not it. |
+| `POST /api/runs` is itself unreliable | 25 consecutive calls | **25/25 succeeded** — not it. |
+| The cycle test alone is flaky | 3× in isolation | **3/3 passed** — not it. |
+| `platform.spec` alone is flaky | 2× in isolation | **6/6 both times** — not it. |
+| `operating-system` + `platform` together | 2× | **10/10 both times** — not it. |
+
+**Still open:** the trigger needs the wider suite context. The next step is to capture the
+orchestrator's own stderr on exit rather than Playwright's summary line — the process is dying
+with a real error that has never been seen.
+
+### 0.9.2 Constitution tablist pointed at panels that were never rendered — fixed
+
+All six tabs set `aria-controls="constitution-<id>"`, but only the **selected** panel is rendered,
+so **five of six pointed at elements that did not exist**. An attribute referencing nothing is
+worse for assistive technology than omitting it.
+
+The selected tab now declares `aria-controls`; inactive tabs declare none; and the panel is
+`aria-labelledby` its tab. `tests/e2e/tablist-aria.spec.ts` — 2 cases that walk every tab and
+assert each relationship resolves, plus that exactly one tab is selected at a time.
+**Verified it bites**: restoring the original attribute fails both tests.
+
+### 0.9.3 Open, deferred
 
 The replay marker added earlier broke six assertions in `postgres-store.test.ts`. That file is
 guarded by `describe.skipIf`, so **26 of its cases never run in the normal suite** — they execute

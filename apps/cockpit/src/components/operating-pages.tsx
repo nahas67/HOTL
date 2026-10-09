@@ -540,10 +540,14 @@ export function ConstitutionPage({
         ].map(([id, label]) => (
           <button
             key={id}
+            id={`constitution-tab-${id}`}
             type="button"
             role="tab"
             aria-selected={tab === id}
-            aria-controls={`constitution-${id}`}
+            // Only the rendered panel exists, so only the selected tab may point at one.
+            // Declaring aria-controls on all six left five of them referencing elements
+            // that were never in the DOM, which is invalid for assistive technology.
+            {...(tab === id ? { "aria-controls": `constitution-${id}` } : {})}
             onClick={() => setTab(id)}
             className={tab === id ? "active" : ""}
           >
@@ -555,6 +559,7 @@ export function ConstitutionPage({
         className="panel os-panel"
         role="tabpanel"
         id={`constitution-${tab}`}
+        aria-labelledby={`constitution-tab-${tab}`}
       >
         {tab === "strategy" && (
           <>
