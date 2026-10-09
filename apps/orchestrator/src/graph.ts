@@ -141,7 +141,16 @@ export function createCommerceGraph(gateway: GuardrailGateway, checkpointer: Che
       if (context.mode !== 'simulation') return { ...skip('refund', 'NO_CONNECTED_SUPPORT_REQUEST', context), supportTickets: [] };
       const prior = state.replanning && state.plan?.stage === 'refund' ? state.plan : null;
       const amount = options.refundAmount ?? 42;
-      const eligible = (o: CommerceOrder) => o.status === 'delivered' && Math.round((o.total - o.refunded) * 100) >= Math.round(amount * 100) && !context.interrupts.some(i => i.status === 'pending' && ((i.payload.request as Record<string, unknown> | undefined) ?? i.payload).orderId === o.id);
+      // Candidate selection only. Whether a refund is permitted -- the balance arithmetic and
+      // the order state it depends on -- is decided solely by the guardrail at /refunds/evaluate.
+      // This node previously reimplemented that policy (minor-unit rounding plus a
+      // `status === 'delivered'` restriction the guardrail does not apply), which is forbidden:
+      // an agent must not carry policy math. It had already drifted: the guardrail marks an
+      // order `partially_refunded` after any partial refund, so this filter silently stopped
+      // proposing refunds the guardrail still permits.
+      // `NO_PENDING_REFUND_FOR_ORDER` is orchestration bookkeeping (an interrupt already awaits
+      // this order), not financial policy, so it stays here.
+      const eligible = (o: CommerceOrder) => !context.interrupts.some(i => i.status === 'pending' && ((i.payload.request as Record<string, unknown> | undefined) ?? i.payload).orderId === o.id);
       const order = prior ? context.orders.find(o => o.id === prior.body.orderId && eligible(o)) : context.orders.find(eligible);
       if (!order || (prior && order.revision !== prior.body.expectedRevision)) return { ...skip('refund', prior ? 'HUMAN_ORDER_CHANGE_OBSERVED' : 'NO_ELIGIBLE_SUPPORT_CASE', context), supportTickets: [] };
       return { activeStage: 'refund', replanning: false, planningContexts: { support_agent: context }, supportTickets: [{ orderId: order.id, amount }], plan: planned(state, 'refund', context, '/refunds/evaluate', { orderId: order.id, amount, currency: 'USD', reasonCode: 'simulation_customer_request', requestedBy: 'support_agent', runId: state.runId, expectedRevision: order.revision }, 'refund', 'Evaluate the unchanged simulation customer refund request') };

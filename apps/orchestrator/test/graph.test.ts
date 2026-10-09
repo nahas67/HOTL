@@ -67,6 +67,40 @@ describe('real LangGraph and real guardrail HTTP integration', () => {
     expect(state.products.find(p => p.id === 'prod-06')?.status).toBe('held');
     expect(state.campaigns).toHaveLength(0); expect(state.refunds).toHaveLength(1);
   });
+  // Rule 1: an agent must not carry financial policy. The orchestrator previously filtered
+  // candidate refunds with its own minor-unit arithmetic plus a `delivered`-only restriction the
+  // guardrail does not apply, and had already drifted: the guardrail marks an order
+  // `partially_refunded` after any partial refund, so that filter silently stopped proposing
+  // refunds the guardrail still permits. The filter has been removed from `graph.ts` so the
+  // guardrail is the single authority for refund eligibility.
+  //
+  // KNOWN GAP, recorded rather than papered over: there is still no regression test that
+  // DISCRIMINATES this. An attempt was written and discarded because it passed identically
+  // against both the old filter and the fix -- a test that cannot fail on the defect it claims
+  // to cover is worse than no test. Closing it needs a fixture where the graph would otherwise
+  // choose a different order, which the seeded ledger does not currently provide.
+  it('keeps refund eligibility in the guardrail, not in the agent', async () => {
+    // The orchestrator must not encode the rule. Assert the invariant directly: a refund the
+    // guardrail permits is permitted regardless of the order's status label.
+    const f = await fixture({ refundAmount: 20 });
+    const before = await f.engine.snapshot();
+    const pending = new Set(before.interrupts.filter(i => i.status === 'pending').map(i => ((i.payload.request as Record<string, unknown> | undefined) ?? i.payload).orderId as string));
+    const target = before.orders.find(o => o.status === 'delivered' && o.refunded === 0 && !pending.has(o.id))!;
+    const first = await f.engine.evaluateRefund({ orderId: target.id, amount: 10, reasonCode: 'simulation_customer_request' }, owner, 'seed-partial-1');
+    expect(first.decision).toBe('allow');
+    const partial = (await f.engine.snapshot()).orders.find(o => o.id === target.id)!;
+    expect(partial.status).toBe('partially_refunded');
+    // A second refund within the remaining balance is still permitted by the guardrail, even
+    // though the order is no longer `delivered`. This is the exact divergence the agent-side
+    // filter encoded.
+    const second = await f.engine.evaluateRefund({ orderId: target.id, amount: 5, reasonCode: 'simulation_customer_request' }, owner, 'seed-partial-2');
+    expect(second.decision).toBe('allow');
+    expect((await f.engine.snapshot()).orders.find(o => o.id === target.id)!.refunded).toBe(15);
+    // And beyond the balance it is refused, which is the guardrail's call to make.
+    const excess = await f.engine.evaluateRefund({ orderId: target.id, amount: 1_000, reasonCode: 'simulation_customer_request' }, owner, 'seed-partial-3');
+    expect(excess.decision).toBe('deny');
+    expect(excess.reason).toBe('REFUND_EXCEEDS_ORDER_BALANCE');
+  });
   it('halts before department actions while paused', async () => {
     const { engine, manager } = await fixture();
     await engine.setPause(true, { reason: 'Test hold' }, owner, 'pause-before-run');
