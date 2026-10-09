@@ -1,0 +1,232 @@
+/*
+ * HOTL design system — tokens.
+ *
+ * The single authoritative scale for colour, space, type, radius, elevation and
+ * motion. Legacy variables declared in globals.css (`--canvas`, `--paper`,
+ * `--ink`, `--muted`, `--line`, `--green`, `--green-dark`, `--sage`) are
+ * re-pointed at these primitives in design-system.css, which loads after both
+ * globals.css and operating.css. That keeps every already-shipped component on
+ * the new scale without rewriting the existing stylesheets.
+ *
+ * Nothing here carries product meaning. Semantic aliases do.
+ */
+
+/* ---------- Primitive scales (theme independent) ---------- */
+
+:root {
+  /* Neutral ramp — cool-leaning greys with a faint green cast. */
+  --n-0: #ffffff;
+  --n-25: #fcfdfb;
+  --n-50: #f7f9f5;
+  --n-100: #eff2ec;
+  --n-150: #e6eae1;
+  --n-200: #dce1d7;
+  --n-300: #c6cec1;
+  --n-400: #9aa496;
+  --n-500: #7b857a;
+  --n-600: #5f6a5f;
+  --n-700: #49534a;
+  --n-800: #333c35;
+  --n-900: #202822;
+  --n-950: #131814;
+  --n-1000: #0b0f0c;
+
+  /* Brand ramp — the HOTL sage green. */
+  --b-50: #f1f6ec;
+  --b-100: #e2ecd8;
+  --b-200: #c8dbb6;
+  --b-300: #a9c790;
+  --b-400: #8bb06e;
+  --b-500: #6c9450;
+  --b-600: #52783c;
+  --b-700: #3f5e30;
+  --b-800: #2f4726;
+  --b-900: #22331d;
+
+  /* Status ramps. Never used to imply authority — only to describe state. */
+  --ok-50: #eef8f0;
+  --ok-100: #d9efe0;
+  --ok-300: #96cfa9;
+  --ok-600: #2f7a48;
+  --ok-700: #226034;
+
+  --warn-50: #fdf6e8;
+  --warn-100: #faebcb;
+  --warn-300: #e3bd6b;
+  --warn-600: #96650b;
+  --warn-700: #734c07;
+
+  --danger-50: #fdf1ef;
+  --danger-100: #fadedb;
+  --danger-300: #e8a49c;
+  --danger-600: #b3392b;
+  --danger-700: #8c2a1f;
+
+  --info-50: #eef3fb;
+  --info-100: #dbe6f7;
+  --info-300: #9db9e0;
+  --info-600: #2f5d96;
+  --info-700: #24467a;
+
+  /* ---------- Space — 4px base ---------- */
+  --s-0: 0;
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 20px;
+  --s-6: 24px;
+  --s-7: 32px;
+  --s-8: 40px;
+  --s-9: 48px;
+  --s-10: 64px;
+  --s-11: 80px;
+  --s-12: 96px;
+
+  /* ---------- Type ---------- */
+  --font-sans: "DM Sans", "Inter", "Segoe UI", system-ui, -apple-system,
+    sans-serif;
+  --font-mono: "Cascadia Code", "SF Mono", Consolas, "Liberation Mono",
+    monospace;
+
+  --t-11: 11px;
+  --t-12: 12px;
+  --t-13: 13px;
+  --t-14: 14px;
+  --t-16: 16px;
+  --t-18: 18px;
+  --t-22: 22px;
+  --t-26: 26px;
+  --t-32: 32px;
+  --t-40: 40px;
+
+  --lh-tight: 1.2;
+  --lh-snug: 1.35;
+  --lh-normal: 1.55;
+  --lh-relaxed: 1.75;
+
+  --fw-regular: 400;
+  --fw-medium: 500;
+  --fw-semibold: 600;
+  --fw-bold: 700;
+
+  --track-tight: -0.02em;
+  --track-normal: 0;
+  --track-wide: 0.06em;
+  --track-wider: 0.12em;
+
+  /* ---------- Radius ---------- */
+  --r-none: 0;
+  --r-xs: 4px;
+  --r-sm: 6px;
+  --r-md: 9px;
+  --r-lg: 12px;
+  --r-xl: 16px;
+  --r-2xl: 22px;
+  --r-pill: 999px;
+
+  /* ---------- Elevation ---------- */
+  --e-0: none;
+  --e-1: 0 1px 2px rgba(19, 24, 20, 0.05), 0 1px 1px rgba(19, 24, 20, 0.03);
+  --e-2: 0 2px 4px rgba(19, 24, 20, 0.05), 0 4px 12px rgba(19, 24, 20, 0.05);
+  --e-3: 0 8px 24px rgba(19, 24, 20, 0.08), 0 2px 6px rgba(19, 24, 20, 0.05);
+  --e-4: 0 24px 60px rgba(19, 24, 20, 0.14), 0 8px 20px rgba(19, 24, 20, 0.07);
+  --ring: 0 0 0 3px rgba(82, 120, 60, 0.28);
+  --ring-danger: 0 0 0 3px rgba(179, 57, 43, 0.24);
+
+  /* ---------- Motion ---------- */
+  --d-fast: 110ms;
+  --d-base: 170ms;
+  --d-slow: 280ms;
+  --ease: cubic-bezier(0.2, 0.7, 0.3, 1);
+
+  /* ---------- Layout ---------- */
+  --z-base: 0;
+  --z-sticky: 20;
+  --z-drawer: 30;
+  --z-overlay: 50;
+  --z-modal: 60;
+  --z-toast: 70;
+  --sidebar-w: 244px;
+  --topbar-h: 62px;
+  --content-max: 1240px;
+}
+
+/* ---------- Dark theme ---------- */
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  /* Surfaces move from light-neutral to dark-neutral. */
+  --ds-canvas: #10160f;
+  --ds-surface: #172016;
+  --ds-surface-raised: #1d271c;
+  --ds-surface-sunken: #0c110b;
+  --ds-surface-hover: #22301f;
+
+  --ds-border: #2c392a;
+  --ds-border-strong: #3b4b39;
+  --ds-border-subtle: #212b20;
+
+  --ds-text: #e6ede1;
+  --ds-text-muted: #a3b1a1;
+  --ds-text-subtle: #7f8d7d;
+  --ds-text-inverse: #10160f;
+
+  --ds-brand: #a9c790;
+  --ds-brand-strong: #c8dbb6;
+  --ds-brand-soft: #24321f;
+  --ds-brand-softer: #1a2517;
+
+  --ds-ok: #96cfa9;
+  --ds-ok-soft: #16281b;
+  --ds-warn: #e3bd6b;
+  --ds-warn-soft: #2a2113;
+  --ds-danger: #e8a49c;
+  --ds-danger-soft: #2c1917;
+  --ds-info: #9db9e0;
+  --ds-info-soft: #16202e;
+
+  --e-1: 0 1px 2px rgba(0, 0, 0, 0.36);
+  --e-2: 0 2px 6px rgba(0, 0, 0, 0.4), 0 8px 20px rgba(0, 0, 0, 0.3);
+  --e-3: 0 10px 30px rgba(0, 0, 0, 0.5);
+  --e-4: 0 28px 70px rgba(0, 0, 0, 0.6), 0 10px 24px rgba(0, 0, 0, 0.4);
+  --ring: 0 0 0 3px rgba(169, 199, 144, 0.3);
+  --ring-danger: 0 0 0 3px rgba(232, 164, 156, 0.28);
+}
+
+/* ---------- Light theme semantic aliases ---------- */
+
+:root,
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --ds-canvas: #f6f8f3;
+  --ds-surface: #ffffff;
+  --ds-surface-raised: #ffffff;
+  --ds-surface-sunken: #eef1ea;
+  --ds-surface-hover: #f1f4ee;
+
+  --ds-border: #e0e5dc;
+  --ds-border-strong: #cbd3c5;
+  --ds-border-subtle: #eef1ea;
+
+  --ds-text: #1e2721;
+  --ds-text-muted: #667065;
+  --ds-text-subtle: #838d80;
+  --ds-text-inverse: #ffffff;
+
+  --ds-brand: #3f5e30;
+  --ds-brand-strong: #2f4726;
+  --ds-brand-soft: #eef4e7;
+  --ds-brand-softer: #f4f8ef;
+
+  --ds-ok: #2f7a48;
+  --ds-ok-soft: #eef8f0;
+  --ds-warn: #96650b;
+  --ds-warn-soft: #fdf6e8;
+  --ds-danger: #b3392b;
+  --ds-danger-soft: #fdf1ef;
+  --ds-info: #2f5d96;
+  --ds-info-soft: #eef3fb;
+}

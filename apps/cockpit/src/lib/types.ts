@@ -1,4 +1,4 @@
-export type Section = 'overview' | 'agents' | 'approvals' | 'products' | 'orders' | 'guardrails' | 'activity' | 'autonomy' | 'integrations' | 'finance';
+export type Section = 'overview' | 'agents' | 'approvals' | 'products' | 'orders' | 'guardrails' | 'activity' | 'autonomy' | 'integrations' | 'finance' | 'settings';
 export type Config = { dailyAdSpendCeiling: number; marginFloor: number; autoRefundThreshold: number; currency: string };
 export type Interrupt = {
   id: string; runId: string; threadId: string; category: string; title: string; summary: string;

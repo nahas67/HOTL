@@ -86,6 +86,7 @@ import {
 } from "./operating-pages";
 import { FinancePage } from "./finance-page";
 import { IntegrationsPage } from "./integrations-page";
+import { SettingsPage } from "./settings-page";
 import { ProductEditor, RefundEditor } from "./manual-actions";
 import { ExpiredProposalAction } from "./expired-proposal-action";
 import { runContinuationNotice } from "@/lib/run-continuation";
@@ -106,6 +107,7 @@ const NAV: { id: Section; name: string; icon: LucideIcon }[] = [
   { id: "autonomy", name: "Autonomy & policy", icon: BookOpen },
   { id: "guardrails", name: "Guardrails", icon: ShieldCheck },
   { id: "activity", name: "Activity", icon: ActivityIcon },
+  { id: "settings", name: "Settings", icon: Settings2 },
 ];
 const HEADINGS: Record<Section, { title: string; subtitle: string }> = {
   autonomy: {
@@ -156,6 +158,11 @@ const HEADINGS: Record<Section, { title: string; subtitle: string }> = {
     title: "Nothing behind the scenes.",
     subtitle:
       "An auditable record of every action, decision, and owner intervention.",
+  },
+  settings: {
+    title: "Everything the system knows about.",
+    subtitle:
+      "Business rules, stores, agents, automation, money, permissions and system health — grouped, with the live state behind each one.",
   },
 };
 const money = (n = 0, decimals = 0) =>
@@ -893,6 +900,27 @@ export function Cockpit({ initialSection }: { initialSection: string }) {
               )}
               {section === "guardrails" && (
                 <GuardrailsPage data={data} onKill={() => setKillOpen(true)} />
+              )}
+              {section === "settings" && (
+                <SettingsPage
+                  api={api}
+                  telemetry={data}
+                  onSaved={async () => {
+                    await refresh();
+                  }}
+                  actions={{
+                    runCycle: async () => {
+                      await runCycle();
+                    },
+                    togglePause: async () => {
+                      await togglePause();
+                    },
+                    paused: data.status === "paused",
+                    status: data.status,
+                    busy,
+                    onEmergencyStop: () => setKillOpen(true),
+                  }}
+                />
               )}
               {section === "autonomy" && (
                 <ConstitutionPage

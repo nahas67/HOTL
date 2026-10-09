@@ -1,4 +1,6 @@
 import type { Metadata } from 'next';
+import './tokens.css';
+import './design-system.css';
 import './globals.css';
 import './operating.css';
 

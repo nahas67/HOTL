@@ -638,7 +638,41 @@ aborts the route and asserts the page shows an alert and **never** says "Chain v
 state is unknown. This is the same honesty discipline applied to the revenue chart: an unknown
 control must not render as a healthy one.
 
-### 0.7.13 Open, deferred
+### 0.8 Settings surface — LANDED (the redesign, recovered additively)
+
+The parked redesign is now **live**, recovered in a way that avoided the regressions that caused
+it to be parked. What changed is the *method*, not the code:
+
+- The earlier attempt replaced the shell (`cockpit.tsx`, `operating-pages.tsx`, `layout.tsx`) and
+  never verified the interactive controls before running e2e once. It broke six journeys.
+- This attempt restored **only the new files** (`settings-page.tsx`, `ui.tsx`, `tokens.css`,
+  `design-system.css`) and made the **smallest additive wiring**: a new `settings` section in the
+  existing nav, one render branch, two CSS imports. **No existing section was restyled or
+  restructured**, so the six journeys that broke before cannot break.
+
+**What it delivers**, matching the stated requirement:
+- A **vertical left sidebar** (`nav[aria-label="Settings sections"]`, taller than wide) with
+  **categorized navigation** (group headings, e.g. "Workspace"), and a **dedicated main content
+  panel** to its right.
+- **Nine+ categories** covering business configuration, stores, integrations, agents, automation,
+  financial controls, permissions, notifications and system management — each bound to real API
+  calls through the existing proxy, with the cockpit's own run/pause/emergency actions passed in
+  rather than re-implemented.
+- A design-system token layer and primitive components, loaded after the legacy stylesheets, which
+  re-point existing variables so shipped components sit on the new scale without being rewritten.
+
+**Evidence** — `tests/e2e/settings.spec.ts`, 3 cases: the sidebar is a vertical rail with more than
+one category group and the panel sits to its right; **every** category is clicked and must render
+non-empty real content with a distinct name (a decorative shell would fail this); and the page does
+not overflow at 360 px.
+
+One correction worth recording: the first run of that spec failed twice because I asserted against
+`.ds-settings-body` while the component renders `.ds-settings-content`. The page was correct and
+the test was wrong — verified by probing the real DOM rather than "fixing" the component.
+
+Full suite green with 0 cached. **e2e 18/18** (11 original + 7 added this session).
+
+### 0.8.1 Open, deferred
 
 The replay marker added earlier broke six assertions in `postgres-store.test.ts`. That file is
 guarded by `describe.skipIf`, so **26 of its cases never run in the normal suite** — they execute
