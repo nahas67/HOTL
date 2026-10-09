@@ -1,10 +1,12 @@
 # HOTL — Full Program Checkpoint and Evidence Register
 
 **Prepared:** 2026-10-08 (supersedes the October 1 snapshot anchored at `8ccf7b5`)
+**Last reconciled:** 2026-10-10 — see **§8**. Every claim in §0–§7 below was written against an older `main`; §8 records which of them the live repository has since overtaken.
 **Repository:** https://github.com/nahas67/HOTL
 **Base branch/head at review:** `main` @ `1de2ad36793258db201aac21f04fdd48d4a0681f`
+**Current `main` (verified live 2026-10-10):** `13a74aa8281739381cf9d085fe29218e0343a980` — **44 commits ahead of the October 1 snapshot**, and `main` was **RED** at that SHA.
 **Prior checkpoint preserved at:** [`docs/checkpoints/HOTL_FULL_CHECKPOINT_2026-10-08_ORIGINAL.md`](checkpoints/HOTL_FULL_CHECKPOINT_2026-10-08_ORIGINAL.md) — SHA-256 `ba2bac52…c852e2`, byte-identical to the copy supplied with this session.
-**Prior audit superseded:** [`docs/MASTER_CHECKPOINT_2026-10-08.md`](MASTER_CHECKPOINT_2026-10-08.md) (branch `audit/hotl-checkpoint-2026-10-08`, open PR #1).
+**Prior audit superseded:** [`docs/MASTER_CHECKPOINT_2026-10-08.md`](MASTER_CHECKPOINT_2026-10-08.md) (branch `audit/hotl-checkpoint-2026-10-08`, PR #1, **closed unmerged 2026-10-08**).
 
 **This is an evidence register, not a production authorization.** Nothing here promotes a gate. No simulated result is provider proof.
 
@@ -1095,3 +1097,191 @@ For every `[ ]` → `[x]`, record **commit SHA + exact command and result + prov
 - [`evidence/gate-a-c-staging-provisioning-2026-10-01/README.md`](../evidence/gate-a-c-staging-provisioning-2026-10-01/README.md) and [`PREFLIGHT.json`](../evidence/gate-a-c-staging-provisioning-2026-10-01/PREFLIGHT.json) — 19 missing settings
 - [`evidence/gate-c-shopify-external-2026-09-28/README.md`](../evidence/gate-c-shopify-external-2026-09-28/README.md) — external BLOCKED
 - [`docs/checkpoints/HOTL_FULL_CHECKPOINT_2026-10-08_ORIGINAL.md`](checkpoints/HOTL_FULL_CHECKPOINT_2026-10-08_ORIGINAL.md) — preserved October 1 snapshot
+
+---
+
+# 8. Reconciliation and repair — 2026-10-10
+
+This section was added by a fresh reconciliation session. It **supersedes §0–§7 wherever they conflict**, and leaves every other gate untouched.
+
+## 8.1 CP-00C — remote freshness. CLOSED.
+
+The prior sessions could not reach GitHub and anchored everything at `8ccf7b5` (Oct 1) or `1de2ad3` (Oct 8). Live state was retrieved this session through the GitHub API and `gh`. Every headline claim in the supplied 2026-10-10 audit documents was **stale**.
+
+| Claim in the 2026-10-10 audit docs | Actual, verified 2026-10-10 |
+| --- | --- |
+| `main` at `1de2ad3` | `main` at **`13a74aa`**, **44 commits** past the Oct 1 snapshot |
+| PR #1 open | PR #1 **closed unmerged** 2026-10-08 |
+| CI red at `1de2ad3`, fix never delivered | CI **green** at `47f1032` via **PR #3** (merged), then **red again** at `13a74aa` |
+| 26 Postgres cases skipped, Docker unavailable | **Docker 29.5.3 is available on this machine**; both SQL drills and the Postgres suite run for real (§8.3) |
+| `sites/` absent from the archive | `sites/` present and tracked |
+| Browser drill 11/11 | **20/20** — settings, responsive, ARIA and audit-integrity specs added since |
+
+**Live `main` was red.** Runs [37981663106](https://github.com/nahas67/HOTL/actions/runs/37981663106) (`Main platform checks`) and [37981663015](https://github.com/nahas67/HOTL/actions/runs/37981663015) (`Isolated kill-switch checks and image`) both **failed** at `13a74aa`. Last green was `47f1032`. Twenty commits landed on a red default branch.
+
+## 8.2 CP-02 — three defects, not one
+
+All three are the **same class** this repository has now hit repeatedly: *a green local run is not evidence of a green runner*. PR #3 fixed the first two instances (a Playwright strict-mode locator, and a `pg_isready` gate that reported ready before the database existed). This session found the third and fourth.
+
+### D-A — Kill-switch journal race (the one CI reported) · FIXED · `4d1d9ff`
+
+`infra/kill-switch/test/journal-multiprocess.test.ts:130` called `exists()` on a child's result file and then `JSON.parse()`d it. `fs.writeFile` creates the path **before** flushing the payload, so a 20 ms poll can land inside that window and parse an empty buffer:
+
+```
+SyntaxError: Unexpected end of JSON input
+ ❯ raceOpen test/journal-multiprocess.test.ts:130:28
+```
+
+**Not** fixed by relaxing the assertion. Children now publish via write-temp + `rename()`, atomic on POSIX and Windows, so the reader only ever observes a complete file. Reproduced deterministically before fixing — see §8.5.
+
+### D-B — Guardrail ledger lock release · REAL CORRECTNESS DEFECT · FIXED · `4d1d9ff`
+
+Found by forcing the turbo cache to miss, **not** by CI. The cross-process drill failed with:
+
+```
+ENOENT: no such file or directory, unlink '...\state.json.lock'
+```
+
+`GuardrailEngine.transaction`'s `finally` unlinked `lockPath` with **no ownership check**. Stale-lock recovery (§0.7.8, D2) can delete a lock whose recorded owner is momentarily unreadable or gone; two processes can then each `open(...,'wx')` successfully and both believe they hold the lock. The faster one deletes the slower one's lock on the way out, and the slower one throws. The release is now conditional on the recorded pid **still being ours**.
+
+This sits directly on the daily-spend ceiling. **The financial invariant itself was never observed violated** — the drill aborts at the child-failure assertion before the ceiling assertions run — but an unowned delete on a mutual-exclusion primitive is not acceptable regardless, and the fix is strictly a tightening: a released lock is now only removed if it is provably ours.
+
+### D-C — PowerShell drill scripts could never pass on Windows · FIXED · `4d1d9ff`
+
+`Start-Process -PassThru` returns a `Process` whose handle Windows PowerShell 5.1 never opens, so `.ExitCode` is `$null` after exit — and `$null -ne 0` is **true**. A run that had already produced the correct result was reported as `pg_ctl failed ()` / `Concurrent reservation process failed`. Reading `.Handle` once after start caches it. Both `test-database.ps1` and `test-runtime-ledger.ps1` now pass.
+
+The drill was never wrong. `race-a` allowed $60 and `race-b` was **denied** `DAILY_CEILING_EXCEEDED` with $40 remaining — the concurrent ceiling held exactly.
+
+## 8.2.1 Five further defects, unmasked one after another · `3147a97` … `faeceec`
+
+Fixing D-A and D-B let the pipeline advance far enough to expose **five** more failures that had been hidden behind them, each revealed only after the previous one was cleared. None is a production safety fault. All are cases of a guarantee being **unverifiable where it actually runs** — or, in one case, never having run at all.
+
+### D-D — The cross-process drill never ran in the workflow built to validate it · FIXED
+
+`.github/workflows/kill-switch-ci.yml` installs the kill-switch **in isolation** — `npm ci --workspaces=false` with `working-directory: infra/kill-switch` — deliberately, so the emergency plane can never silently depend on the main application's dependency tree. Both multiprocess drills hardcoded the **pnpm workspace** path `<repo>/node_modules/tsx/dist/loader.mjs`, which does not exist in that layout. Every child process died instantly on an unresolvable `--import`, and the tests failed on a 30 s timeout having exercised nothing:
+
+```
+Timed out after 30000ms waiting for the holder to acquire the lock
+Timed out after 30000ms waiting for every child to resolve its open attempt
+```
+
+**So the cross-process single-writer guard — the proof that the independent emergency journal cannot fork into two writers — has never executed in the workflow built to validate it.** Both `tsx` locations are now probed, with a loud failure if neither resolves rather than a silent timeout. The isolation itself is correct and is preserved; only the path assumption was wrong. The same latent fix is applied to the guardrail ledger drill.
+
+### D-E — A Windows-only contract asserted on every platform · FIXED (two instances)
+
+`readPersisted()` in the guardrail engine and `replaceWithRetry()` in the orchestrator checkpointer both retry `EPERM/EACCES/EBUSY` **only when `process.platform === 'win32'`**. **That gate is correct** and is deliberately symmetric with the ledger write path: on POSIX `rename` is atomic, so a reader observes either the old inode or the new one, and an `EPERM` there is a genuine permission fault that should surface immediately rather than be retried ten times.
+
+Both tests injected a Windows error code and expected the Windows behaviour everywhere, so they failed on the Linux runners. **Production code is unchanged.** Each now asserts the real per-platform contract — retry and return real state on Windows; fail closed with `EPERM`, never serve cache or half-persist, elsewhere — and both still prove retries stay bounded and are never fully spent.
+
+> The first version of this fix asserted that *no* failure is consumed off Windows. The runner showed the engine consumes exactly one, because `snapshot()` still makes one attempt and `checkMissingState` rethrows a non-`ENOENT` error without re-reading. The assertion was wrong about the engine, not about the platform, and was corrected against the source rather than the symptom.
+
+### D-F — The owner-console Site was tested against unproven output · FIXED
+
+`Owner console site tests` ran `npm test` in a fresh checkout, but the tests assert on **built** output — one is literally *"build emits every local asset referenced by the page"* — and `dist/` is git-ignored:
+
+```
+not ok 5 - build emits every local asset referenced by the page
+error: "ENOENT: no such file or directory, open '.../sites/hotl-owner-console/dist/index.html'"
+```
+
+Locally it passed only because a developer had already run the build. The step now builds first and then tests, which is the check working as intended and additionally makes CI prove the build succeeds on a clean tree. Verified from a deleted `dist/`: **5 pass, 0 fail**.
+
+### The class, stated plainly
+
+This is now the **sixth** instance of one pattern, and the repository keeps producing the counterexample:
+
+| # | Defect | Green locally? |
+| --- | --- | --- |
+| 1 | Playwright strict-mode locator (PR #3) | yes |
+| 2 | `pg_isready` gate before the database exists (PR #3) | yes |
+| 3 | IPC file existence-vs-completeness (D-A) | yes |
+| 4 | Install-layout assumption for the child loader (D-D) | yes |
+| 5 | Windows-only retry contract asserted on POSIX (D-E) | yes |
+| 6 | Test asserting on a build artifact never built in CI (D-F) | yes |
+
+**A green local run is not evidence of a green runner.** Any future checkpoint that records local-only evidence for a concurrency, platform or packaging property should be treated as unverified until a runner has confirmed it.
+
+## 8.3 Verification — forced, uncached, this machine
+
+`scripts/verify-suite.ps1` forces typecheck and the turbo tests so a cache hit can never be presented as evidence.
+
+| Step | Command | Result |
+| --- | --- | --- |
+| Lint | `pnpm lint` | **PASS** (exit 0) |
+| Typecheck | `pnpm exec turbo run typecheck --force` | **PASS** — 11/11 |
+| Workspace tests | `pnpm exec turbo run test --concurrency=2 --force` | **PASS** — 11/11 tasks |
+| Root tests | `node --test tests/*.test.mjs` | **PASS** — 22 |
+| Build | `pnpm build` | **PASS** (exit 0) |
+| Browser drill | `pnpm test:e2e` | **PASS** — **20/20** |
+| Migration + RLS drill | `infra/scripts/test-database.ps1` | **PASS** — `[OK] … concurrent spend tests passed` |
+| Runtime-ledger drill | `infra/scripts/test-runtime-ledger.ps1` | **PASS** — state/audit MD5 `804c6f52…` identical before restart, after restart, and after restore into a separate database; backup SHA-256 unchanged |
+
+Per-package, uncached: guardrail-service **321 passed / 26 skipped (347)**, cockpit 35, orchestrator 50, kill-switch **24** (was 23/1 failing), connector-sdk 49, commerce-core 17, storefront 7.
+
+## 8.4 Guard strength was tested, not assumed
+
+A fix that makes CI green by weakening an assertion is not a fix.
+
+- Mutating the kill journal's lock from exclusive create (`'wx'` → `'w'`) makes **all 3** multiprocess guards fail: `expected 3 to be 1`. Restored byte-identical afterwards; `git status` confirms `src/journal.ts` is unmodified.
+- The ledger ceiling drill still passes with the ownership check in place.
+- `lock-recovery.test.ts` gains **4** tests pinning the release rule: deletes a lock it owns, **leaves** a lock another owner has taken over, does not throw when the lock is already gone, and a transaction still commits normally.
+- The typechecker caught a defect introduced *during this work* — a `return` inside a `finally` block discards the `try` block's value, silently turning every transaction result into `undefined`. Fixed, and the reason is recorded in the code so it is not repeated.
+
+## 8.5 Reproduction artefacts
+
+The IPC defect was reproduced **deterministically** rather than won on a timing lottery, because a flake that only appears on a slow runner cannot be distinguished from a coincidence. A standalone probe showed `exists()` → `true`, `readFile().length` → `0`, `JSON.parse` → `SyntaxError: Unexpected end of JSON input` — byte-identical to the CI failure.
+
+## 8.6 Newly discovered gaps · 🆕
+
+| # | Gap | Status |
+| --- | --- | --- |
+| N1 | **The 19 staged settings have never been recomputed** against a real environment. §"The 19 staged static settings still missing" describes a recorded local shell, not a provisioned staging host. | `[ ]` 🚨 |
+| N2 | **Docker is available on this machine**, so the long-standing "Postgres unverifiable" limitation no longer applies. Every future checkpoint may claim real Postgres evidence rather than "skipped". | Adopted this session |
+| N3 | **The PS1 drill scripts had never passed on any machine.** They had been reported as passing on 2026-10-08, which could only have been the `.sh` scripts on Linux. The Windows path was silently unverified. | Fixed |
+| N4 | **In-process concurrency tests cannot model cross-process locks.** The repo now has genuine multi-OS-process drills for the ledger and the kill journal; other concurrency claims remain in-process only and should not be read as cross-process proof. | `[ ]` |
+| N5 | **PR #2 is redundant** (superseded by PR #3) and **PR #4 is docs-only and still open**. Both await an owner decision. | `[ ]` 🚨 owner |
+| N6 | **Docker Hub is unreachable from the GitHub runners.** Every container step fails while authenticating: `429 Too Many Requests`, then `504 Gateway Timeout`, then `context deadline exceeded` against `auth.docker.io`. This blocks the kill-switch image build, both Postgres drills and the gitleaks scan. **It is external infrastructure, not a defect**, and the same drills pass on this machine. The steps were deliberately **left in place** — removing them would drop the checks the workflows exist to perform. | `[ ]` 🚨 external |
+| N7 | **The kill-switch image has therefore never actually been built by CI.** `independent-deployment.test.ts` asserts the workflow *contains* a build step; that assertion passed while the build itself was failing. A workflow that asserts on its own configuration is not the same as the configuration working. | `[ ]` 🚨 |
+| N8 | **The gitleaks scan has not run** since these repairs landed, because it is a `docker run` step. The exposed PAT named in D1 must still be treated as disclosed regardless. | `[ ]` 🚨 |
+
+## 8.7 Gates — unchanged
+
+**No gate moved.** Gate A remains owner-unapproved, Gate B externally blocked, Gate C has **zero** external provider evidence. The 19 missing staging settings stand. Nothing in §8 converts a local result into provider proof.
+
+## 8.8 Status at the end of this session
+
+| Item | State |
+| --- | --- |
+| `main` | **`13a74aa` — RED** (both workflows), unchanged by this session |
+| Repair branch | `codex/cp02-ci-red-2026-10-10` @ **`faeceec`**, pushed |
+| PR | **#5**, open, awaiting required check `validate` |
+| Branch protection | `main` requires `validate` — D3 from §6 is **now satisfied** |
+| Gates A / B / C | **Unchanged. Blocked.** |
+| Local evidence | All six release steps green, uncached, plus both SQL drills |
+
+### Remote status on `faeceec` — everything that does not need a container is green
+
+| Step | Result |
+| --- | --- |
+| `pnpm lint` | **PASS** |
+| `pnpm typecheck` | **PASS** |
+| `pnpm test` | **PASS** — every package, previously the failing step |
+| Guarded Medusa payment bridge | **PASS** |
+| Owner console site tests | **PASS** — 5/5, after the D-F fix |
+| `pnpm build` | **PASS** |
+| Browser drill (`pnpm test:e2e`) | **PASS** — 20/20 |
+| Migration + RLS drill | `[ ]` — Docker Hub unreachable (N6) |
+| Runtime-ledger drill | `[ ]` — not reached |
+| Credential scan | `[ ]` — not reached |
+
+`Isolated kill-switch checks and image`: `npm ci`, typecheck and **`npm test` all PASS** — the cross-process single-writer drill now genuinely executes for the first time. Only `docker build` fails, on Docker Hub authentication.
+
+**Every code-level check on the branch is green. The remaining red is entirely an external registry outage, and it is recorded as a blocker rather than removed from the pipeline.**
+
+## 8.9 Next checkpoint
+
+1. **CP-02 close-out** — re-run both workflows once Docker Hub recovers; obtain green `validate` on a real SHA; merge PR #5 under the owner's merge authority. Do not merge while any container step is red.
+2. **CP-03B** — the cockpit route/control and vertical Settings audit. `settings-page.tsx` (75 KB) and `operating-pages.tsx` (44 KB) exist and the browser drill covers their layout, but no per-control classification of working / simulated / disabled yet exists.
+3. **N1** — recompute the 19 staged settings against a real provisioned environment rather than a recorded shell.
+4. **N7** — prove the kill-switch image actually builds and is independently deployable, once the registry is reachable.
+5. Gate A remains blocked on the owner and cannot be advanced by any agent.
