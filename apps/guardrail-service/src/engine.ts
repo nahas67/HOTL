@@ -303,7 +303,26 @@ export class GuardrailEngine {
         }
         this.state=state;
         return structuredClone(result);
-      } finally {if(handle) await handle.close();if(lockPath&&handle) await unlink(lockPath);}
+      } finally {
+        // No `return` here: a `return` inside `finally` discards the value the `try` block
+        // produced, silently turning every transaction's result into `undefined`.
+        if(handle) {
+          await handle.close();
+          // Release ONLY a lock this process still owns.
+          //
+          // Unlinking `lockPath` unconditionally is unsound: recovery above can delete a lock
+          // whose recorded owner is momentarily unreadable or gone, after which two processes
+          // can each believe they hold it. The faster one then deletes the slower one's lock file
+          // in this `finally`, and the slower one fails to release with ENOENT -- observed in
+          // the cross-process drill. Re-reading the recorded pid and comparing it to our own
+          // makes the delete conditional on still being the owner, so a stolen lock is never
+          // removed on the way out. Any uncertainty here leaves the file alone: this
+          // transaction has already committed, and a crashed owner is recoverable.
+          if(lockPath)try {
+            if((await readFile(lockPath,'utf8')).trim()===String(process.pid))await unlink(lockPath);
+          } catch {}
+        }
+      }
     };
     const pending=this.tail.then(work,work);this.tail=pending.catch(()=>{});return pending;
   }
