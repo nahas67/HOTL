@@ -813,6 +813,38 @@ document today's real loss, so the defect stays visible and the change will anno
 defect hiding behind vague uncertainty, and it is not a financial risk — guardrail idempotency
 already prevents a duplicated effect.
 
+### 0.9.3 D1 — CLOSED. A stale checkpoint writer is recorded, never allowed to erase
+
+Implemented with the design constraint established in round 13: **a checkpoint saver must never
+reject a write.**
+
+`flush()` now compares the bytes on disk against the bytes this writer last read or wrote. On a
+mismatch it **skips the write and records the conflict** — it does not throw, because LangGraph
+issues checkpoint writes it does not always await and any rejection becomes an unhandled rejection
+that fails the package and hides the signal. `FileSaver.conflicts()` exposes what was refused and
+why.
+
+This closes the defect that had been open, mischaracterised, and re-attempted across four rounds:
+
+```text
+before:  instance B writes t2  ->  file = [t2]        <- t1 destroyed, silently
+after:   instance B writes t2  ->  file = [t1], B.conflicts() = [{ reason: "refusing to overwrite another writer's runs" }]
+```
+
+**Verified it bites.** Disabling the guard restores the old failure exactly:
+`expected [ 'thread-bravo' ] to deeply equal [ 'thread-alpha' ]` and the owner's run disappearing
+with *"This run has no saved checkpoint."* Restored, the orchestrator runs **7/7 with zero unhandled
+errors**.
+
+**Not a financial risk either way:** guardrail idempotency on a deterministic action key already
+prevents a duplicated effect, and `graph.test.ts` proves it. What was lost was availability and
+auditability — an owner's run became unfindable — and that is now a recorded, inspectable conflict.
+
+One implementation note worth recording: the first version named both the private field and the
+public accessor `conflicts`. The instance field shadows the prototype method, so `saver.conflicts`
+was the array rather than the function — found because the test failed with
+`second.conflicts is not a function`, not by inspection. The field is now `recordedConflicts`.
+
 ### 0.9.4 Open, deferred
 
 The replay marker added earlier broke six assertions in `postgres-store.test.ts`. That file is

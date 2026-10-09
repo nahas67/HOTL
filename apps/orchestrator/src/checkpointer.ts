@@ -12,6 +12,17 @@ const invalidCheckpoint = () => new Error("Invalid checkpoint file; refusing to 
 export class FileSaver extends MemorySaver {
   private saving: Promise<void> = Promise.resolve();
   private loaded = false;
+  /** Bytes this instance last read or wrote; a mismatch means another writer moved the file. */
+  private lastSeen: string | undefined;
+  /**
+   * Writes refused because another writer moved the file underneath us.
+   *
+   * Recorded, NEVER thrown. LangGraph issues checkpoint writes it does not always
+   * await, so a rejection from this saver escapes into an unobserved promise, is
+   * reported as an unhandled rejection, fails the package, and hides the signal.
+   * Recording keeps the refusal observable while leaving the other writer's data intact.
+   */
+  private recordedConflicts: { at: string; reason: string }[] = [];
   constructor(private file: string) {
     super();
   }
@@ -73,6 +84,7 @@ export class FileSaver extends MemorySaver {
     // Adopt existing version-1 checkpoints without changing any saved bytes.
     if (!initialized)
       await this.writeDurable(`${this.file}.initialized`, '{"version":1}\n');
+    this.lastSeen = bytes;
     this.loaded = true;
     return this;
   }
@@ -127,16 +139,51 @@ export class FileSaver extends MemorySaver {
       }
     }
   }
+  private recordConflict(reason: string) {
+    this.recordedConflicts.push({ at: new Date().toISOString(), reason });
+  }
+
+  /**
+   * Writes this saver refused because another writer moved the file.
+   *
+   * A checkpoint saver must never REJECT a write: LangGraph issues writes it does not always
+   * await, so a rejection escapes into an unobserved promise, becomes an unhandled rejection,
+   * fails the package, and hides the signal. Conflicts are therefore recorded here and the stale
+   * write is skipped, which leaves the other writer's data intact and makes the conflict
+   * inspectable instead of silent.
+   */
+  conflicts(): readonly { at: string; reason: string }[] {
+    return this.recordedConflicts.map(entry => ({ ...entry }));
+  }
+
   private flush() {
     const save = this.saving.then(async () => {
       if (!this.loaded || !await this.readMarker())
         throw new Error("Checkpoint initialization marker is missing; refusing to write.");
       await stat(this.file);
+      // Optimistic concurrency. `flush` rewrites the instance's ENTIRE in-memory storage and
+      // renames it over the file, so a writer holding a stale view would silently erase every
+      // thread it has not seen -- including threads written after it loaded. Compare, then SKIP
+      // and record the conflict rather than clobber: a lost checkpoint is an availability and
+      // auditability failure, and destroying another writer's runs is worse than recording that
+      // this writer was stale.
+      let current: string;
+      try { current = await readFile(this.file, "utf8"); }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        this.recordConflict("Checkpoint file disappeared under this writer; refusing to recreate it.");
+        return;
+      }
+      if (this.lastSeen !== undefined && current !== this.lastSeen) {
+        this.recordConflict("Checkpoint file changed since this writer last read it; refusing to overwrite another writer's runs.");
+        return;
+      }
       const snapshot = this.serialize();
       const temporary = `${this.file}.${randomUUID()}.tmp`;
       try {
         await this.writeDurable(temporary, snapshot);
         await this.replaceWithRetry(temporary, this.file);
+        this.lastSeen = snapshot;
       } finally {
         await unlink(temporary).catch(error => {
           if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;

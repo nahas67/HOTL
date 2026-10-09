@@ -91,8 +91,17 @@ const managerOver = async (file: string, client: HttpGuardrails) =>
     client,
   );
 
-describe("CHARACTERIZATION — two FileSaver instances share no mutual exclusion", () => {
-  it("last writer wins the whole thread set, erasing threads it never loaded", async () => {
+/**
+ * Lets the graph finish any checkpoint writes it still has in flight, so a provoked
+ * conflict does not leak rejections into `afterEach` and fail the package for a reason
+ * unrelated to the assertion under test.
+ */
+async function quiesce(): Promise<void> {
+  for (let i = 0; i < 12; i++) await new Promise(resolve => setTimeout(resolve, 25));
+}
+
+describe("two FileSaver instances — a stale writer is recorded, never allowed to erase", () => {
+  it("skips the stale write, records the conflict, and preserves the other writer's threads", async () => {
     const file = await scratch();
 
     const first = await new FileSaver(file).load();
@@ -101,21 +110,27 @@ describe("CHARACTERIZATION — two FileSaver instances share no mutual exclusion
     await first.put(threadOf("thread-alpha"), checkpoint("alpha"), rootInput);
     expect(await persistedThreadIds(file)).toEqual(["thread-alpha"]);
 
-    // The second instance loaded an EMPTY file, so writing discards everything
-    // the first instance had already committed to disk.
+    // `second` loaded an EMPTY file. Writing it would discard everything `first` committed.
+    // It is skipped and RECORDED, and deliberately does NOT throw: a checkpoint saver must
+    // never reject a write, because LangGraph issues writes it does not always await and a
+    // rejection becomes an unhandled rejection that fails the package.
     await second.put(threadOf("thread-bravo"), checkpoint("bravo"), rootInput);
-    expect(await persistedThreadIds(file)).toEqual(["thread-bravo"]);
+    expect(await persistedThreadIds(file)).toEqual(["thread-alpha"]);
+    expect(second.conflicts(), "the stale writer must record why it refused").toHaveLength(1);
+    expect(second.conflicts()[0]?.reason).toMatch(/refusing to overwrite another writer/i);
 
-    // ...and the first instance, still holding only its own view, now destroys
-    // the second instance's thread in exactly the same way.
+    // The skipped write must not poison the legitimate one: nothing changed on disk, so
+    // `first`'s view is still current and its next write succeeds.
     await first.put(threadOf("thread-charlie"), checkpoint("charlie"), rootInput);
     expect(await persistedThreadIds(file)).toEqual(["thread-alpha", "thread-charlie"]);
+    expect(first.conflicts(), "the healthy writer must record no conflict").toHaveLength(0);
 
-    // Divergence: the live instance still believes in the thread that disk lost.
-    expect(await second.getTuple(threadOf("thread-bravo"))).toBeDefined();
-    expect(await (await new FileSaver(file).load()).getTuple(threadOf("thread-bravo"))).toBeUndefined();
-
-    // No error, no warning, no refusal: the loss is completely silent.
+    const reader = await new FileSaver(file).load();
+    expect(await reader.getTuple(threadOf("thread-alpha"))).toBeDefined();
+    expect(await reader.getTuple(threadOf("thread-charlie"))).toBeDefined();
+    // The thread the stale writer tried to add is absent, because its write was skipped.
+    expect(await reader.getTuple(threadOf("thread-bravo"))).toBeUndefined();
+    await quiesce();
   }, 30_000);
 
   it("keeps one instance's own sequential writes intact", async () => {
@@ -142,20 +157,18 @@ describe("CHARACTERIZATION — the same loss is visible to the owner through Run
     const runA = await workerA.start("daily", "worker-a-daily-run");
     expect(runA.runId).toBeTruthy();
 
-    // Worker B writes next. Its in-memory view never saw worker A's run, so
-    // this write replaces the whole thread set on disk.
-    const runB = await workerB.start("daily", "worker-b-daily-run");
-    expect(runB.runId).toBeTruthy();
-    expect(runB.runId).not.toBe(runA.runId);
+    // Worker B's in-memory view never saw worker A's run, so this write would have replaced
+    // the whole thread set on disk. The checkpoint write is now skipped and recorded rather
+    // than destroying it. The run itself still reports an outcome to its caller; what matters
+    // here is that worker A's run survives on disk.
+    await workerB.start("daily", "worker-b-daily-run");
+    await quiesce();
 
-    // A restart is the honest way to observe the file: neither process's own
-    // memory is consulted, so this is what an operator would find after a crash.
+    // A restart is the honest way to observe the file: neither process's own memory is
+    // consulted, so this is what an operator would find. Worker A's run SURVIVES.
     const afterRestart = await managerOver(file, client);
-    await expect(afterRestart.get(runA.runId)).rejects.toMatchObject({
-      message: "This run has no saved checkpoint.",
-      statusCode: 404,
-    });
-    expect((await afterRestart.get(runB.runId)).runId).toBe(runB.runId);
+    expect((await afterRestart.get(runA.runId)).runId).toBe(runA.runId);
+    await quiesce();
   }, 60_000);
 
   it("still serializes start and resume within a single instance", async () => {
