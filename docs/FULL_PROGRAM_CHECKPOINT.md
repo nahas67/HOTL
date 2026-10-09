@@ -776,6 +776,43 @@ now precisely stated rather than mysterious: **a next attempt must quiesce the g
 provocation test before asserting**, so the conflict is provoked deliberately and then drained,
 instead of leaking rejections into teardown. The guard mechanism itself has been validated.
 
+### 0.9.3 D1 — SETTLED: the saver must never reject a checkpoint write
+
+Four attempts were made across three rounds. The conclusion is now settled by measurement, and it
+is a design constraint rather than an open question.
+
+**Established facts, in order:**
+
+1. `flush()` rewrites the instance's entire storage and renames it over the file, so a stale writer
+   silently erases every thread it has not seen. The defect is real and measured.
+2. Throwing the refusal from `flush()` produces unhandled rejections (24).
+3. Recording it in `flush()` and throwing from `put()` produces the same, and provably **not** from
+   `flush()` — that path no longer throws at all (19).
+4. **Normal operation is unaffected.** Without the provocation file the orchestrator suite runs
+   **7/7 with zero unhandled errors**. Rounds 6–7 wrongly generalised from the provocation tests
+   to production behaviour; that was incorrect and is corrected here.
+5. Draining the graph inside the provocation test with an explicit quiesce did **not** help (still
+   19), and the captured rejections are verbatim the refusal message, raised from LangGraph's own
+   write path.
+
+**The settled design constraint: a checkpoint saver must never reject a write.** LangGraph issues
+`put`/`putWrites` it does not always await, so any rejection from the saver escapes into an
+unobserved promise, is reported as an unhandled rejection, fails the package, and — worse — hides
+the signal that matters. A correct fix must therefore:
+
+- compare and **skip** the stale write without throwing, recording the conflict as state;
+- expose that recorded conflict through an explicit inspection path (and, ideally, the run
+  `Result`), so the operator sees it;
+- never surface it as a promise rejection.
+
+That is a genuine design change to `FileSaver` plus a way to read the recorded conflict, and it is
+**not attempted blind**. `checkpoint-multi-instance.test.ts` keeps the characterization tests that
+document today's real loss, so the defect stays visible and the change will announce itself.
+
+**Net: D1 is open by decision, with its cause and its constraints fully established.** It is not a
+defect hiding behind vague uncertainty, and it is not a financial risk — guardrail idempotency
+already prevents a duplicated effect.
+
 ### 0.9.4 Open, deferred
 
 The replay marker added earlier broke six assertions in `postgres-store.test.ts`. That file is
