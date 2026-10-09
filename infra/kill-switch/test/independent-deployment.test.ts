@@ -11,6 +11,13 @@
 //
 // 2. `.github/workflows/kill-switch-ci.yml` ran only on pull requests, so the Dockerfile and
 //    compose path were never re-validated after a merge to `main`.
+//
+// 3. Added 2026-10-10: on that branch every container step failed while authenticating to Docker
+//    Hub -- 429 Too Many Requests, then 504 Gateway Timeout, then context deadline exceeded against
+//    auth.docker.io -- while every code-level step stayed green. The base images moved to a
+//    byte-identical mirror and are pinned by digest, and the container steps gained a bounded
+//    retry. Those are exactly the kind of changes that get silently reverted as "unnecessary", so
+//    they are asserted here along with the credential rules that keep agent tooling out of builds.
 import { afterEach, describe, expect, it } from 'vitest';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
@@ -189,5 +196,182 @@ describe('independent emergency-plane deployment', () => {
     expect(workflow).not.toMatch(/\bsecrets\./);
     expect(workflow).not.toMatch(/\b(aws|gcloud|az|doctl|kubectl|helm|flyctl|railway|heroku|terraform)\b/);
     expect(workflow).toMatch(/permissions:\s*\n\s+contents: read/);
+  });
+});
+
+// ---------------------------------------------------------------------------------------
+// Registry resilience. Added 2026-10-10.
+//
+// On 2026-10-10 every container step on the repair branch failed on Docker Hub authentication
+// -- 429 Too Many Requests, then 504 Gateway Timeout, then context deadline exceeded against
+// auth.docker.io -- while every code-level step in the same runs stayed green. The base images
+// moved to a mirror and are pinned by digest, and the container steps gained a bounded retry.
+// These assertions stop either half of that being quietly undone, and they stop a future edit
+// from "simplifying" the mirror back into the outage.
+//
+// A note on placement: the main workflow's container checks are asserted here because this
+// file already reads `.github/workflows/` from the repository root. Those two assertions
+// belong in tests/repository-hygiene.test.mjs, which is outside this package's ownership.
+// ---------------------------------------------------------------------------------------
+
+/** The exact mirror reference and digest the Dockerfile must use, verified against Docker Hub. */
+const NODE_BASE = 'public.ecr.aws/docker/library/node:22-alpine';
+const NODE_DIGEST = 'sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402';
+const POSTGRES_16_DIGEST = 'sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea';
+const POSTGRES_18_DIGEST = 'sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873';
+const GITLEAKS_DIGEST = 'sha256:cdbb7c955abce02001a9f6c9f602fb195b7fadc1e812065883f695d1eeaba854';
+
+const workflowFile = async (name: string) => normalise(await readFile(join(repositoryRoot, '.github', 'workflows', name), 'utf8'));
+const scriptFile = async (...parts: string[]) => normalise(await readFile(join(repositoryRoot, ...parts), 'utf8'));
+
+/**
+ * These assertions are about YAML and shell line structure, and this repository's working tree
+ * uses CRLF. `$` in a multiline regex would otherwise anchor before the `\r`, so every
+ * end-of-line assertion would fail for a reason that has nothing to do with the workflow.
+ */
+function normalise(source: string) {
+  return source.replace(/\r\n/g, '\n');
+}
+
+describe('container base images are pinned and reachable', () => {
+  it('pins every kill-switch build stage by digest from the mirror registry', async () => {
+    const dockerfile = normalise(await readFile(join(packageRoot, 'Dockerfile'), 'utf8'));
+    const stages = dockerfile.split(/\r?\n/).filter(line => /^FROM\s/.test(line));
+    expect(stages, 'the two-stage build must keep both stages').toHaveLength(2);
+    for (const line of stages) {
+      expect(line, `every stage must be pinned by digest: ${line}`).toMatch(/^FROM\s\S+@sha256:[0-9a-f]{64}\s+AS\s/);
+      expect(line, `every stage must use the verified mirror reference: ${line}`)
+        .toContain(`${NODE_BASE}@${NODE_DIGEST}`);
+    }
+    // A bare tag is the exact thing that regressed, so name it rather than trusting the checks above.
+    expect(dockerfile).not.toMatch(/^FROM node:22-alpine\s+AS/m);
+  });
+
+  it('records in the Dockerfile why the registry differs, so the mirror is not reverted', async () => {
+    const dockerfile = normalise(await readFile(join(packageRoot, 'Dockerfile'), 'utf8'));
+    expect(dockerfile).toMatch(/auth\.docker\.io/);
+    expect(dockerfile).toMatch(/429 Too Many Requests/);
+    // The digest comparison is what makes the substitution auditable rather than a leap of faith.
+    expect(dockerfile).toMatch(/docker buildx imagetools inspect node:22-alpine/);
+    expect(dockerfile).toMatch(/do not replace these references with `node:22-alpine`/i);
+  });
+
+  it('pins both disposable Postgres drill images by digest inside the drill scripts', async () => {
+    const database = await scriptFile('infra', 'scripts', 'test-database.sh');
+    const ledger = await scriptFile('infra', 'scripts', 'test-runtime-ledger.sh');
+    expect(database).toContain(`public.ecr.aws/docker/library/postgres:16-alpine@${POSTGRES_16_DIGEST}`);
+    expect(ledger).toContain(`public.ecr.aws/docker/library/postgres:18-alpine@${POSTGRES_18_DIGEST}`);
+    // The pin has to be what is actually launched, not decoration inside a comment.
+    expect(database).toMatch(/^docker run -d --name "\$container".*"\$postgres_image"/m);
+    expect(ledger).toMatch(/^\s*"\$postgres_image"\)$/m);
+    // A local escape hatch exists for debugging; it must never become the CI path.
+    expect(database).toMatch(/HOTL_DRILL_POSTGRES_IMAGE:-/);
+    expect(ledger).toMatch(/HOTL_DRILL_POSTGRES_IMAGE:-/);
+    const workflow = await workflowFile('ci.yml');
+    expect(workflow, 'CI must use the pinned default, never the local override')
+      .not.toContain('HOTL_DRILL_POSTGRES_IMAGE');
+  });
+
+  it('runs the credential scan from the pinned gitleaks image on both history and working tree', async () => {
+    const workflow = await workflowFile('ci.yml');
+    expect(workflow).toContain(`ghcr.io/gitleaks/gitleaks:v8.28.0@${GITLEAKS_DIGEST}`);
+    expect(workflow).toContain('git /repo --redact --no-banner --config /repo/.gitleaks.toml');
+    expect(workflow).toContain('dir /repo --redact --no-banner --config /repo/.gitleaks.toml');
+  });
+
+  it('keeps every container check in the main workflow', async () => {
+    const workflow = await workflowFile('ci.yml');
+    // Both PostgreSQL drills, named as scripts and as announced check labels.
+    expect(workflow).toContain('infra/scripts/test-database.sh');
+    expect(workflow).toContain('infra/scripts/test-runtime-ledger.sh');
+    expect(workflow).toContain("'migration-and-rls-drill'");
+    expect(workflow).toContain("'runtime-ledger-drill'");
+    expect(workflow).toContain("'credential-scan-git-history'");
+    expect(workflow).toContain("'credential-scan-working-tree'");
+    // No step may be quietly downgraded to a tolerated failure.
+    expect(workflow).not.toMatch(/^\s*continue-on-error:/m);
+    expect(workflow).not.toMatch(/if:\s*(always|success\(\)\s*\|\|\s*failure)/);
+  });
+
+  it('keeps the kill-switch image build and artifact export in the workflow', async () => {
+    const workflow = await workflowFile('kill-switch-ci.yml');
+    expect(workflow).toContain('docker build -t hotl-kill-switch:validated');
+    expect(workflow).toContain('docker save hotl-kill-switch:validated -o kill-switch-image.tar');
+    expect(workflow).toContain("'kill-switch-image-build'");
+    expect(workflow).toContain("'kill-switch-image-export'");
+    expect(workflow).toContain('actions/upload-artifact@v4');
+    expect(workflow).not.toMatch(/^\s*continue-on-error:/m);
+  });
+});
+
+describe('container steps retry within a finite budget', () => {
+  for (const name of ['ci.yml', 'kill-switch-ci.yml']) {
+    it(`${name} bounds its retries and can never turn a failure into a pass`, async () => {
+      const workflow = await workflowFile(name);
+
+      const attempts = workflow.match(/^\s*attempts=(\d+)\s*$/m);
+      expect(attempts, `${name} must declare a numeric attempt budget`).not.toBeNull();
+      const budget = Number(attempts![1]);
+      expect(budget, 'the retry budget must be more than zero and small and finite')
+        .toBeGreaterThan(0);
+      expect(budget).toBeLessThanOrEqual(5);
+
+      // The budget is spent *before* the loop can sleep again, which is what makes it finite.
+      expect(workflow).toContain('if [[ "$attempt" -ge "$attempts" ]]');
+      expect(workflow).toContain('backoff=$(( base_sleep * attempt ))');
+      expect(workflow).toContain('sleep "$backoff"');
+
+      // Both non-success exits propagate the failing command's own status rather than a zero.
+      const propagations = workflow.match(/return "\$status"/g) ?? [];
+      expect(propagations, 'exhausted budget and non-transient failure must both propagate')
+        .toHaveLength(2);
+
+      // A genuine failure is not transient and must not be retried at all.
+      expect(workflow).toMatch(/if ! grep -Eqi "\$transient" "\$log"; then/);
+
+      // Nothing that would swallow a failure.
+      expect(workflow).not.toMatch(/^\s*continue-on-error:/m);
+      expect(workflow).not.toMatch(/\|\|\s*true\b/);
+    });
+  }
+});
+
+describe('build processes cannot inherit agent credentials', () => {
+  it('declares no credential-carrying ARG or ENV in the Dockerfile', async () => {
+    const dockerfile = normalise(await readFile(join(packageRoot, 'Dockerfile'), 'utf8'));
+    const declarations = dockerfile.split(/\r?\n/).filter(line => /^\s*(ARG|ENV)\s/.test(line));
+    expect(declarations.length, 'the runtime stage still pins its environment').toBeGreaterThan(0);
+    for (const line of declarations) {
+      expect(line, `no ARG/ENV may carry a credential into an image layer: ${line}`)
+        .not.toMatch(/token|secret|passw|credential|api[_-]?key|\bpat\b|private[_-]?key/i);
+    }
+  });
+
+  it('passes no build argument or build secret to the image build', async () => {
+    const workflow = await workflowFile('kill-switch-ci.yml');
+    expect(workflow, 'no value may be smuggled into a layer through a build argument')
+      .not.toMatch(/--build-arg/);
+    expect(workflow, 'no value may be smuggled into a layer through a build secret')
+      .not.toMatch(/--secret\b/);
+  });
+
+  it('starts the image build with agent-tooling credentials removed from its environment', async () => {
+    const workflow = await workflowFile('kill-switch-ci.yml');
+    expect(workflow).toMatch(/env -u GITHUB_MCP_TOKEN/);
+    expect(workflow, 'the scrubbed environment must wrap the build itself')
+      .toMatch(/env -u [A-Z_]+[^\n]*\\\n\s+-u [A-Z_]+[^\n]*\\\n\s+docker build/);
+  });
+
+  it('forces agent-tooling credentials empty for every step of both workflows', async () => {
+    for (const name of ['ci.yml', 'kill-switch-ci.yml']) {
+      const workflow = await workflowFile(name);
+      for (const variable of ['GITHUB_MCP_TOKEN', 'MCP_TOKEN', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'DEEPSEEK_API_KEY']) {
+        expect(workflow, `${name} must blank ${variable} at job level`)
+          .toMatch(new RegExp(`^\\s+${variable}: ''$`, 'm'));
+      }
+      // GITHUB_TOKEN is scoped by `permissions: contents: read` and is used by checkout; blanking
+      // it would be theatre that breaks the checkout and hides the real control.
+      expect(workflow).not.toMatch(/^\s*GITHUB_TOKEN:\s*''$/m);
+    }
   });
 });

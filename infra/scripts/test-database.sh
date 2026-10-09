@@ -3,10 +3,23 @@
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 container="hotl-sql-drill-${RANDOM}-$$"
+# Disposable drill image, pinned by digest.
+#
+# public.ecr.aws/docker/library/postgres is Amazon's byte-identical mirror of the official
+# Docker Hub image -- `docker buildx imagetools inspect` resolves postgres:16-alpine on Docker
+# Hub and this reference to the same digest,
+# sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea -- because GitHub-hosted
+# runners are being rate-limited against auth.docker.io (429, then 504, then context deadline
+# exceeded) and that rate-limiting, not this drill, was the sole remaining cause of red container
+# steps. The digest is the pin; the tag is for readability only. CI uses this default and must not
+# override it. HOTL_DRILL_POSTGRES_IMAGE exists for local debugging only.
+#
+# Do not "simplify" this back to postgres:16-alpine.
+postgres_image="${HOTL_DRILL_POSTGRES_IMAGE:-public.ecr.aws/docker/library/postgres:16-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea}"
 docker info >/dev/null
 cleanup() { docker rm -f "$container" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
-docker run -d --name "$container" -e POSTGRES_PASSWORD=hotl-disposable-test-only -e POSTGRES_DB=hotl postgres:16-alpine >/dev/null
+docker run -d --name "$container" -e POSTGRES_PASSWORD=hotl-disposable-test-only -e POSTGRES_DB=hotl "$postgres_image" >/dev/null
 ready=false
 for attempt in $(seq 1 60); do
   # Connect over the loopback interface to the exact database this drill uses. `pg_isready`

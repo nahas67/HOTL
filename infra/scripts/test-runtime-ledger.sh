@@ -15,6 +15,17 @@ container_id=''
 network_id=''
 ownership_label='hotl.runtime-drill'
 
+# Disposable drill image, pinned by digest. Same reasoning and same mirror as
+# infra/scripts/test-database.sh: GitHub-hosted runners are rate-limited against auth.docker.io,
+# and public.ecr.aws/docker/library/postgres is byte-identical to Docker Hub's official image.
+# `docker buildx imagetools inspect postgres:18-alpine` and
+# `docker buildx imagetools inspect public.ecr.aws/docker/library/postgres:18-alpine` both resolve
+# to sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873. CI uses this default
+# and must not override it; HOTL_DRILL_POSTGRES_IMAGE is for local debugging only.
+#
+# Do not "simplify" this back to postgres:18-alpine.
+postgres_image="${HOTL_DRILL_POSTGRES_IMAGE:-public.ecr.aws/docker/library/postgres:18-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873}"
+
 # Only resources carrying this invocation's UUID may be removed. In particular,
 # never remove a name that belonged to an existing container after a failed run.
 cleanup() {
@@ -53,7 +64,7 @@ container_id="$(docker create --name "$container_name" \
   --env POSTGRES_HOST_AUTH_METHOD=trust \
   --env POSTGRES_USER=hotl_runtime_drill \
   --env POSTGRES_DB=hotl_runtime_drill \
-  postgres:18-alpine)"
+  "$postgres_image")
 docker start "$container_id" >/dev/null
 
 wait_for_database() {

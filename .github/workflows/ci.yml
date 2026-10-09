@@ -8,6 +8,25 @@ permissions:
 jobs:
   validate:
     runs-on: ubuntu-latest
+    # Agent-tooling credentials must not reach a build process.
+    #
+    # On 2026-10-08 a live fine-grained GitHub PAT was found written to disk in plaintext: the
+    # Next.js build had serialized a process environment variable into its turbopack cache under
+    # apps/cockpit/.next/cache. Every step in this job runs with these names forced empty, so a
+    # repository or environment variable carrying one cannot be inherited by `pnpm build` or
+    # serialized into any build cache. Empty is enforced at job level so it also covers steps added
+    # later; a step-level `env:` is the only thing that could override it, and that is a visible,
+    # reviewable act.
+    #
+    # GITHUB_TOKEN is deliberately NOT blanked: it is the Actions-provided token that
+    # actions/checkout uses, it is already constrained to `contents: read` by the block above, and
+    # it is not an agent-tooling credential.
+    env:
+      GITHUB_MCP_TOKEN: ''
+      MCP_TOKEN: ''
+      ANTHROPIC_API_KEY: ''
+      OPENAI_API_KEY: ''
+      DEEPSEEK_API_KEY: ''
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -44,16 +63,98 @@ jobs:
         run: pnpm exec playwright install --with-deps chromium
       - name: Exercise the local simulation in the browser
         run: pnpm test:e2e
-      - name: Validate production migration and RLS on local Postgres
-        run: bash infra/scripts/test-database.sh
-      - name: Validate runtime ledger and guardrail engine on disposable Postgres
-        run: bash infra/scripts/test-runtime-ledger.sh
-      - name: Scan git history and working tree for credentials
-        # Same tool, version, and invocation used for the 2026-10-08 local review, so a
-        # local pass and a CI pass mean the same thing. Findings are redacted in logs.
+      # ---------------------------------------------------------------------------
+      # Container checks: two disposable-Postgres drills and the credential scan.
+      #
+      # On 2026-10-10 all three failed while authenticating to Docker Hub -- 429 Too Many
+      # Requests, then 504 Gateway Timeout, then context deadline exceeded against
+      # auth.docker.io -- while every code-level step in the same runs stayed green. Two
+      # changes fix that without weakening a single check:
+      #
+      #   1. The base images come from a mirror and are pinned by digest. See the registry
+      #      note in infra/kill-switch/Dockerfile for the digest comparison that proves the
+      #      mirror is the same image, and for why it must not be reverted to Docker Hub.
+      #      The drill scripts carry their own pins; CI uses their defaults and overrides
+      #      neither.
+      #   2. Each check runs through a bounded retry wrapper, so a residual transient 5xx
+      #      costs a delay instead of the whole job.
+      #
+      # None of these three checks may be removed, skipped, or marked continue-on-error.
+      # They are the only automated proof that the production migration/RLS path applies,
+      # that the runtime ledger survives a real database restart and a real backup/restore,
+      # and that no credential is committed. Deleting them would make the job green by
+      # making it meaningless.
+      #
+      # Grouping them into one step preserves the previous semantics exactly: GitHub Actions
+      # skips every remaining step after the first failure anyway, so the first failing check
+      # already stopped the ones after it. Each check still announces itself by name.
+      # ---------------------------------------------------------------------------
+      - name: Container checks - disposable Postgres drills and credential scan
         run: |
-          docker run --rm -v "$PWD:/repo" -w /repo zricethezav/gitleaks:v8.28.0 \
-            git /repo --redact --no-banner --config /repo/.gitleaks.toml
-          docker run --rm -v "$PWD:/repo" -w /repo zricethezav/gitleaks:v8.28.0 \
-            dir /repo --redact --no-banner --config /repo/.gitleaks.toml
+          set -euo pipefail
+
+          # Bounded retry with backoff for container steps.
+          #
+          # Three properties this wrapper must keep, asserted from
+          # infra/kill-switch/test/independent-deployment.test.ts:
+          #   * Finite. At most $attempts tries. There is no unbounded loop anywhere below.
+          #   * A retry can never turn a failure into a pass. Every path out of this function
+          #     other than success returns the failing command's own non-zero exit code.
+          #   * Only registry/network transient output is retried. A genuine assertion or
+          #     migration failure fails immediately instead of being retried three times.
+          attempts=3
+          base_sleep=15
+          transient='429 Too Many Requests|toomanyrequests|502 Bad Gateway|503 Service Unavailable|504 Gateway Timeout|context deadline exceeded|TLS handshake timeout|i/o timeout|connection reset by peer|failed to resolve reference|failed to (pull|resolve) image|unexpected EOF'
+
+          run_container_check() {
+            local label="$1"; shift
+            local log attempt status backoff
+            log="${RUNNER_TEMP:-/tmp}/hotl-${label}.log"
+            mkdir -p "$(dirname "$log")"
+            attempt=1
+            while true; do
+              printf '\n[container-check] === %s: attempt %d of %d ===\n' "$label" "$attempt" "$attempts"
+              set +e
+              "$@" 2>&1 | tee "$log"
+              status="${PIPESTATUS[0]}"
+              set -e
+              if [[ "$status" -eq 0 ]]; then
+                printf '[container-check] %s: PASSED on attempt %d\n' "$label" "$attempt"
+                return 0
+              fi
+              if [[ "$attempt" -ge "$attempts" ]]; then
+                printf '[container-check] %s: FAILED after %d attempts (exit %d); not retrying further\n' "$label" "$attempt" "$status"
+                return "$status"
+              fi
+              if ! grep -Eqi "$transient" "$log"; then
+                printf '[container-check] %s: FAILED (exit %d) with no transient registry signature; failing without retry\n' "$label" "$status"
+                return "$status"
+              fi
+              backoff=$(( base_sleep * attempt ))
+              printf '[container-check] %s: transient registry/network error; retrying in %ds\n' "$label" "$backoff"
+              sleep "$backoff"
+              attempt=$(( attempt + 1 ))
+            done
+          }
+
+          # Credential scan. ghcr.io is the gitleaks project's own registry; gitleaks is a
+          # third-party image and is not mirrored into the public gallery. The digest is
+          # byte-identical to zricethezav/gitleaks:v8.28.0 on Docker Hub -- both resolve to
+          # sha256:cdbb7c955abce02001a9f6c9f602fb195b7fadc1e812065883f695d1eeaba854.
+          # Same tool, version and invocation as the 2026-10-08 local review, so a local pass
+          # and a CI pass mean the same thing. Findings are redacted in logs.
+          gitleaks='ghcr.io/gitleaks/gitleaks:v8.28.0@sha256:cdbb7c955abce02001a9f6c9f602fb195b7fadc1e812065883f695d1eeaba854'
+
+          # 1. Production migration + RLS on a disposable Postgres 16.
+          run_container_check 'migration-and-rls-drill' bash infra/scripts/test-database.sh
+          # 2. Runtime ledger + guardrail engine on a disposable Postgres 18, including a real
+          #    database restart and a real backup/restore digest comparison.
+          run_container_check 'runtime-ledger-drill' bash infra/scripts/test-runtime-ledger.sh
+          # 3. Credential scan of the full git history and of the working tree.
+          run_container_check 'credential-scan-git-history' \
+            docker run --rm -v "$PWD:/repo" -w /repo "$gitleaks" \
+              git /repo --redact --no-banner --config /repo/.gitleaks.toml
+          run_container_check 'credential-scan-working-tree' \
+            docker run --rm -v "$PWD:/repo" -w /repo "$gitleaks" \
+              dir /repo --redact --no-banner --config /repo/.gitleaks.toml
 # No deploy credentials or kill-switch deploy actions belong in this workflow.
