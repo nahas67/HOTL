@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { access, mkdtemp, readFile, rename, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -26,9 +27,30 @@ import { KillJournal } from "../src/journal.js";
  */
 const here = dirname(fileURLToPath(import.meta.url));
 const holderEntry = resolve(here, "fixtures", "journal-holder.ts");
-const tsxLoader = pathToFileURL(
-  resolve(here, "..", "..", "..", "node_modules", "tsx", "dist", "loader.mjs"),
-).href;
+
+/**
+ * Locate the tsx loader across both install layouts this package is built by.
+ *
+ * The pnpm workspace hoists `tsx` to the repository root, but
+ * `.github/workflows/kill-switch-ci.yml` deliberately installs this service in
+ * ISOLATION -- `npm ci --workspaces=false` with `working-directory:
+ * infra/kill-switch` -- so the emergency plane can never silently depend on the
+ * main application's dependency tree. In that layout there is no root
+ * `node_modules`, so every child process died instantly with an unresolvable
+ * `--import` and both multiprocess tests failed on a 30s timeout having tested
+ * nothing at all. The isolation is correct and is preserved; only the path
+ * resolution was wrong.
+ */
+const tsxCandidates = [
+  resolve(here, "..", "..", "..", "node_modules", "tsx", "dist", "loader.mjs"), // pnpm workspace root
+  resolve(here, "..", "node_modules", "tsx", "dist", "loader.mjs"), // isolated npm ci
+];
+const tsxPath = tsxCandidates.find(candidate => existsSync(candidate));
+if (!tsxPath)
+  throw new Error(
+    `Cannot locate the tsx loader for child processes. Looked in:\n${tsxCandidates.join("\n")}`,
+  );
+const tsxLoader = pathToFileURL(tsxPath).href;
 
 const WORKERS = 3;
 
