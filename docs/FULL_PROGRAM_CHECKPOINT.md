@@ -845,6 +845,11 @@ public accessor `conflicts`. The instance field shadows the prototype method, so
 was the array rather than the function — found because the test failed with
 `second.conflicts is not a function`, not by inspection. The field is now `recordedConflicts`.
 
+Making a refusal *recordable but not throwable* would be self-defeating unless someone can read
+the record, so `/health` now reports `checkpointConflicts` from the saver, and the server wires the
+saver's source in after construction. `tests/checkpoint-conflict-reporting.test.ts` covers both the
+empty and reported cases, so a skipped checkpoint cannot quietly become invisible again.
+
 ### 0.9.4 Open, deferred
 
 The replay marker added earlier broke six assertions in `postgres-store.test.ts`. That file is

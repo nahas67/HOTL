@@ -2,7 +2,7 @@ import { HttpGuardrails } from "./client.js";
 import { createCheckpointer } from "./checkpointer.js";
 import { createCommerceGraph } from "./graph.js";
 import { RunManager, RunError } from "./manager.js";
-import { createOrchestratorApp } from "./app.js";
+import { createOrchestratorApp, setCheckpointConflictSource } from "./app.js";
 import type { OwnerInterrupt } from "@hotl/schemas";
 import { startQueueWorkers } from "./queue.js";
 
@@ -52,6 +52,10 @@ const app = createOrchestratorApp(manager, async (incoming) => {
     },
   };
 });
+// A skipped checkpoint (stale writer) must be visible, not only held inside the saver.
+setCheckpointConflictSource(
+  () => (checkpointer as { conflicts?: () => readonly { at: string; reason: string }[] }).conflicts?.() ?? [],
+);
 await app.listen({
   port: Number(process.env.ORCHESTRATOR_PORT ?? 4300),
   host: "127.0.0.1",

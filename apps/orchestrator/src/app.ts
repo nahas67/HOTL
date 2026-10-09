@@ -4,6 +4,23 @@ import type { OwnerInterrupt } from "@hotl/schemas";
 import { RunManager } from "./manager.js";
 
 type OwnerContext = { id: string; interrupts: () => Promise<OwnerInterrupt[]> };
+
+type CheckpointConflict = { at: string; reason: string };
+
+/**
+ * Records where stale-writer checkpoint conflicts come from, so `/health` can report them.
+ *
+ * A conflict means a checkpoint write was SKIPPED because another writer had moved the file.
+ * The saver deliberately does not reject, because LangGraph issues writes it does not always
+ * await -- so the conflict has to be surfaced somewhere an operator can read it, not left only
+ * inside the saver.
+ */
+let conflictSource: (() => readonly CheckpointConflict[]) | undefined;
+
+export function setCheckpointConflictSource(source: () => readonly CheckpointConflict[]): void {
+  conflictSource = source;
+}
+
 export function createOrchestratorApp(
   manager: RunManager,
   authenticate: (headers: Record<string, unknown>) => Promise<OwnerContext>,
@@ -27,6 +44,7 @@ export function createOrchestratorApp(
     service: "orchestrator",
     status: "ok",
     mode: process.env.HOTL_MODE ?? "simulation",
+    checkpointConflicts: conflictSource?.() ?? [],
   }));
   app.post("/api/runs", async (request, reply) => {
     const owner = await authenticate(request.headers);
