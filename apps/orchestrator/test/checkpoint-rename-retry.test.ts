@@ -18,6 +18,14 @@ import { FileSaver } from '../src/checkpointer.js';
 // into a cascade of ECONNREFUSED failures across the rest of the drill.
 
 let renameFailures = 0;
+
+// The retry is deliberately Windows-only, matching the guardrail ledger's own rename retry.
+// On POSIX `rename` is atomic and EPERM means a genuine permission fault that should surface
+// immediately rather than be retried ten times. This test was written Windows-shaped only and
+// failed on the Linux runners with "expected 2 to be 0", so it now asserts the real per-platform
+// contract instead of assuming the Windows one.
+const RETRIES_TRANSIENT_RENAME = process.platform === 'win32';
+
 vi.mock('node:fs/promises', async () => {
   const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
   return {
@@ -52,10 +60,23 @@ describe('checkpoint rename tolerates a transient Windows sharing collision', ()
     try {
       const saver = await new MockedSaver(file).load();
       renameFailures = 3;
-      await saver.put(threadOf('thread-a'), checkpoint('a'), rootInput);
-      expect(renameFailures, 'all transient rename failures should have been retried').toBe(0);
-      const reopened = await new MockedSaver(file).load();
-      expect(await reopened.getTuple(threadOf('thread-a'))).toBeDefined();
+      if (RETRIES_TRANSIENT_RENAME) {
+        await saver.put(threadOf('thread-a'), checkpoint('a'), rootInput);
+        expect(renameFailures, 'all transient rename failures should have been retried').toBe(0);
+        const reopened = await new MockedSaver(file).load();
+        expect(await reopened.getTuple(threadOf('thread-a'))).toBeDefined();
+      } else {
+        // Off Windows a rename failure is a real permission fault, not a sharing collision.
+        // It must surface rather than be retried, and must leave nothing half-written: a
+        // partially persisted checkpoint is worse than a clean refusal.
+        await expect(saver.put(threadOf('thread-a'), checkpoint('a'), rootInput)).rejects.toMatchObject({
+          code: 'EPERM',
+        });
+        // Exactly one attempt: consuming the other two armed failures would mean it retried.
+        expect(renameFailures, 'not retried off Windows').toBe(2);
+        const reopened = await new MockedSaver(file).load();
+        expect(await reopened.getTuple(threadOf('thread-a'))).toBeUndefined();
+      }
     } finally { await rm(directory, { recursive: true, force: true }); }
   });
 
@@ -67,6 +88,10 @@ describe('checkpoint rename tolerates a transient Windows sharing collision', ()
       renameFailures = 50;
       await expect(saver.put(threadOf('thread-b'), checkpoint('b'), rootInput)).rejects.toBeTruthy();
       expect(renameFailures).toBeGreaterThan(0);
+      // Bounded means bounded: the budget is never fully spent spinning. Off Windows exactly
+      // one attempt is made, because there is no retry at all on this platform.
+      expect(renameFailures).toBeLessThan(50);
+      if (!RETRIES_TRANSIENT_RENAME) expect(renameFailures, 'not retried off Windows').toBe(49);
     } finally { await rm(directory, { recursive: true, force: true }); }
   });
 });
