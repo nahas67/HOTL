@@ -587,10 +587,23 @@ timing effect that was not identified. Shipping a change that makes the suite re
 the rejections, which would hide exactly the signal that matters — was not acceptable, so the
 attempt was withdrawn and `main` left green.
 
-**What a future attempt should do:** establish where the unhandled rejections originate (most
-likely an unawaited `flush()` reached through a `RunManager` path) before adding the guard. The
-diagnosis, the mechanism, the tests and the measurement are all preserved here and in the
-reverted commit's design; this is unfinished work, not a rejected idea.
+**What a future attempt must do differently — the mechanism, not just the guard.** The diagnosis
+from round 6 is specific: the refusal is *correct*, but throwing from `FileSaver.flush()` is not
+safe in this codebase, because **the saver's contract assumes every caller awaits every write and
+LangGraph does not guarantee that**. A refused `put`/`putWrites` therefore becomes an **unhandled
+rejection** whenever the graph issues a checkpoint write it does not await. This is the same
+failure shape as the checkpoint-poisoning defect fixed earlier: the saver is not the only owner
+of the write outcome.
+
+So a next attempt should not simply re-add `throw` inside `flush()`. Either:
+
+- the saver records the refusal as durable state and surfaces it at the next **awaited** boundary
+  (a `put` the caller does await), so nothing is ever thrown into an unobserved promise; or
+- `RunManager`/graph-level error handling absorbs refused writes explicitly, making the saver's
+  refusal observable through the run result instead of the promise.
+
+Until one of those is designed and tested, adding the throw makes the suite red. That is why the
+attempt was withdrawn rather than tuned.
 
 ### 0.7.10 D3 — unlocked ledger reads. OBSERVATION, not reproduced
 
