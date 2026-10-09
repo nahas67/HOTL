@@ -30,9 +30,15 @@ jobs:
         working-directory: apps/commerce-core/medusa
         run: npm ci && npm test
       # Also an isolated npm project with no dependencies, and likewise outside the workspace.
+      # The site tests assert on the BUILT output -- that every asset referenced by the page is
+      # emitted -- but `dist/` is git-ignored, so a fresh checkout has no `dist/` and the test
+      # died with ENOENT on index.html. Locally the suite passed only because a developer had
+      # already run the build, which is exactly the local-green/CI-red pattern this step is in
+      # the workflow to catch. Building here also means CI verifies the build itself, rather
+      # than testing output of unknown provenance.
       - name: Owner console site tests
         working-directory: sites/hotl-owner-console
-        run: npm test
+        run: npm run build && npm test
       - run: pnpm build
       - name: Install browser for application checks
         run: pnpm exec playwright install --with-deps chromium
