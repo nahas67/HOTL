@@ -78,6 +78,39 @@ select pg_temp.expect_failure('delete from public.kill_switch_state','KILL_SWITC
 select pg_temp.expect_failure('truncate public.kill_switch_state','APPEND_ONLY');
 select pg_temp.expect_failure($q$select public.reserve_ad_spend('00000000-0000-0000-0000-000000000001','marketing_agent','killed',100,'USD','killed-spend-key')$q$,'KILL_STATE_UNAVAILABLE_OR_ENGAGED');
 
+-- Rule 2: a DELETE is a mutation. Every guarded domain table must journal one, and the journal
+-- entry must carry the row as it existed immediately before removal -- a DELETE trigger has no
+-- NEW row, so an audit_service_mutation that reads `new` records nothing usable.
+do $$ declare relation text; begin
+  foreach relation in array array['agent_runs','agent_actions','interrupts','kill_switch_state','pause_state','guardrail_config','commerce_orders','refunds','webhook_events','action_outbox'] loop
+    if not exists(select 1 from pg_trigger t join pg_class c on c.oid=t.tgrelid join pg_namespace n on n.oid=c.relnamespace
+                  where n.nspname='public' and c.relname=relation and t.tgname='audit_service_mutation'
+                    and (t.tgtype & 8) <> 0 and (t.tgtype & 2) = 0) then
+      raise exception 'DELETE is unaudited on public.%',relation;
+    end if;
+  end loop;
+end $$;
+
+insert into public.webhook_events(owner_id,provider,event_id,payload_hash)
+values('00000000-0000-0000-0000-000000000001','drill','delete-audit-1','sha256:delete-audit-one');
+delete from public.webhook_events where owner_id='00000000-0000-0000-0000-000000000001' and provider='drill' and event_id='delete-audit-1';
+insert into public.webhook_events(owner_id,provider,event_id,payload_hash)
+values('00000000-0000-0000-0000-000000000001','drill','delete-audit-2','sha256:delete-audit-two');
+delete from public.webhook_events where owner_id='00000000-0000-0000-0000-000000000001' and provider='drill' and event_id='delete-audit-2';
+
+do $$ declare total bigint; recorded jsonb; begin
+  if exists(select 1 from public.webhook_events where event_id in ('delete-audit-1','delete-audit-2')) then
+    raise exception 'Delete did not remove the webhook event';
+  end if;
+  select count(*) into total from public.audit_log where owner_id='00000000-0000-0000-0000-000000000001' and event_type='webhook_events.delete';
+  if total <> 2 then raise exception 'DELETE was not audited: expected 2 webhook_events.delete events, found %',total; end if;
+  select payload into recorded from public.audit_log where owner_id='00000000-0000-0000-0000-000000000001' and event_type='webhook_events.delete' and payload->'row'->>'event_id'='delete-audit-2';
+  if recorded is null or recorded->'row'->>'provider' <> 'drill' then raise exception 'Delete audit did not record the removed row'; end if;
+  -- A DELETE refused by a BEFORE trigger is not a successful mutation and must leave no event.
+  if exists(select 1 from public.audit_log where event_type='kill_switch_state.delete') then raise exception 'A refused DELETE was audited'; end if;
+end $$;
+
+-- Independent re-derivation of the whole chain, including the two DELETE events above.
 do $$ begin
   if exists(select 1 from (select sequence,prev_hash,lag(hash,1,'') over(partition by owner_id order by sequence) as expected from public.audit_log) chain where prev_hash<>expected) then
     raise exception 'Audit chain linkage failed';

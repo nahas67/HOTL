@@ -135,6 +135,47 @@ test('active probes block on absent endpoints and reject unsafe URLs without mak
   assert.equal(count, 0);
 });
 
+// The preflight listed RUNTIME_DATABASE_DDL_PRIVILEGES as notProbed while a probe asserted the
+// guardrail's own `runtimeDdl: "denied"` claim. That is a contradiction: the preflight never opens
+// a database connection, so the runtime role's DDL privileges are only ever self-reported. The
+// probe name must therefore carry its evidence class, and the limitation must stay open.
+test('the guardrail probe is labelled self-reported and the DDL privilege claim stays unprobed', async () => {
+  const input = good();
+  const fetchImpl = async url => {
+    if (String(url).endsWith('/api/shopify/oauth/callback')) return { ok: false, status: 403, json: async () => ({}) };
+    const body = String(url).endsWith('/health/ready')
+      ? { status: 'ready', persistence: 'available', workspaceBinding: 'verified', runtimeRole: 'non-superuser-no-bypassrls', runtimeDdl: 'denied', killReader: 'reachable' }
+      : String(url).endsWith('/state') ? { engaged: false, mode: 'live' }
+        : { status: 'ready', ingressReady: true, workerReady: false, reconciliationReady: true, reconciliationMode: 'OWNER_MANUAL' };
+    return { ok: true, status: 200, json: async () => body };
+  };
+  const active = await runActiveStagingProbes(input, { fetchImpl });
+
+  // The guardrail probe must exist under a name that states where its value came from.
+  const guardrail = active.results.find(item => /^GUARDRAIL_/.test(item.name));
+  assert.ok(guardrail, 'the guardrail readiness probe is missing from the results');
+  assert.match(guardrail.name, /SELF_REPORTED/, `probe name must state its evidence class: ${guardrail.name}`);
+  assert.doesNotMatch(guardrail.name, /^GUARDRAIL_INDEPENDENT/);
+  // A passing self-report is still a self-report, and must be machine-readable as one.
+  assert.equal(guardrail.status, 'VERIFIED');
+  assert.equal(guardrail.evidenceClass, 'GUARDRAIL_SELF_REPORTED_NOT_INDEPENDENTLY_VERIFIED');
+
+  // The limitation stays open, and is named so the contradiction cannot be reintroduced silently.
+  assert.ok(active.notProbed.includes('RUNTIME_DATABASE_DDL_PRIVILEGES_SELF_REPORTED_NOT_INDEPENDENTLY_VERIFIED'));
+  assert.ok(!active.notProbed.includes('RUNTIME_DATABASE_DDL_PRIVILEGES'));
+  // Genuinely unprobed controls must not be quietly dropped to make a report look better.
+  assert.ok(active.notProbed.includes('KILL_DEPLOYMENT_LOGICAL_INDEPENDENCE'));
+  assert.ok(active.notProbed.includes('BACKUP_RESTORE_DRILL'));
+  assert.ok(active.notProbed.includes('SHOPIFY_DEVELOPMENT_STORE_CONNECTIVITY'));
+  assert.ok(active.notProbed.includes('SHOPIFY_PROVIDER_WEBHOOK_DELIVERY'));
+  // The static report must publish the same evidence classes as the active report.
+  assert.deepEqual(checkStagingReadiness(input).activeProbes.notProbed, active.notProbed);
+  // No probe may be presented as an independent database verification; none of them is one.
+  assert.equal(active.results.filter(item => item.evidenceClass === 'INDEPENDENT_DATABASE_VERIFICATION').length, 0);
+  assert.equal(active.status, 'PARTIALLY_VERIFIED');
+  assert.equal(checkStagingReadiness(input).externalStagingVerified, false);
+});
+
 test('guardrail active probe rejects a readiness response that omits the live no-DDL check', async () => {
   const input = good();
   const active = await runActiveStagingProbes(input, {
@@ -148,7 +189,7 @@ test('guardrail active probe rejects a readiness response that omits the live no
     },
   });
   assert.equal(active.status, 'BLOCKED');
-  assert.equal(active.results.find(item => item.name === 'GUARDRAIL_DATABASE_WORKSPACE_AND_KILL_READER')?.status, 'BLOCKED');
+  assert.equal(active.results.find(item => item.name === 'GUARDRAIL_SELF_REPORTED_WORKSPACE_AND_KILL_READER')?.status, 'BLOCKED');
 });
 
 test('durable worker and explicitly disabled modes are reported separately', () => {

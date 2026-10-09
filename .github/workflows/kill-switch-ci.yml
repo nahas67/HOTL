@@ -1,5 +1,9 @@
 name: Isolated kill-switch checks and image
 on:
+  # A pull request alone leaves the Dockerfile and compose path unvalidated after merge.
+  push:
+    branches: [main]
+    paths: ['infra/kill-switch/**', '.github/workflows/kill-switch-ci.yml']
   pull_request:
     paths: ['infra/kill-switch/**', '.github/workflows/kill-switch-ci.yml']
   workflow_dispatch:

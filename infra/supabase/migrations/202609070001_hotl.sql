@@ -337,14 +337,20 @@ end $$;
 create trigger refund_aggregate before insert or update on public.refunds for each row execute function public.enforce_refund_aggregate();
 
 create function public.audit_service_mutation() returns trigger language plpgsql security definer set search_path = pg_catalog,public as $$
+declare v_owner uuid; v_row jsonb;
 begin
   if TG_OP='UPDATE' and new.owner_id<>old.owner_id then raise exception 'OWNER_IMMUTABLE'; end if;
-  perform public.append_audit(new.owner_id,'system',session_user,TG_TABLE_NAME || '.' || lower(TG_OP),jsonb_build_object('row',to_jsonb(new),'databaseRole',current_setting('role',true)));
+  -- Rule 2 covers every successful mutation, so DELETE is journalled too. A DELETE trigger has
+  -- no NEW record: reading `new` would journal an empty row and lose the deleted state.
+  if TG_OP='DELETE' then v_owner := old.owner_id; v_row := to_jsonb(old);
+  else v_owner := new.owner_id; v_row := to_jsonb(new); end if;
+  perform public.append_audit(v_owner,'system',session_user,TG_TABLE_NAME || '.' || lower(TG_OP),jsonb_build_object('row',v_row,'databaseRole',current_setting('role',true)));
+  if TG_OP='DELETE' then return old; end if;
   return new;
 end $$;
 do $$ declare relation text; begin
   foreach relation in array array['agent_runs','agent_actions','interrupts','kill_switch_state','pause_state','guardrail_config','commerce_orders','refunds','webhook_events','action_outbox'] loop
-    execute format('create trigger audit_service_mutation after insert or update on public.%I for each row execute function public.audit_service_mutation()',relation);
+    execute format('create trigger audit_service_mutation after insert or update or delete on public.%I for each row execute function public.audit_service_mutation()',relation);
   end loop;
 end $$;
 

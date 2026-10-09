@@ -1,8 +1,18 @@
 import { resolve } from 'node:path';
 import { createKillSwitch, ACTION_NAMES, type Hook } from './server.js';
 
-const mode = process.env.HOTL_MODE ?? 'simulation';
-if (!['simulation', 'live'].includes(mode)) throw new Error('HOTL_MODE must be simulation or live');
+// Rule 3 / rule 7: the emergency plane fails closed. An unset `HOTL_MODE` must not inherit
+// `simulation`, because simulation mode authenticates with the owner token, read token and
+// reauthentication password published in this repository's `.env.example`. An operator who
+// omitted one variable would otherwise start a write-capable emergency control with public
+// credentials and a bypassed reauthentication flow. Simulation is now an explicit opt-in.
+const mode = process.env.HOTL_MODE;
+if (mode !== 'simulation' && mode !== 'live') {
+  throw new Error(
+    'HOTL_MODE must be set explicitly to "live" (deployed emergency plane) or "simulation" '
+    + '(local demo only). Refusing to start with an implicit mode. Check docs/kill-switch-runbook.md.',
+  );
+}
 const simulation = mode === 'simulation';
 const hooks: Partial<Record<typeof ACTION_NAMES[number], Hook>> = {};
 for (const action of ACTION_NAMES) {

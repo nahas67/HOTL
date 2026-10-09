@@ -18,6 +18,11 @@ export interface StagingReadinessReport {
     missing?: string[];
     results: Array<{
       name: string;
+      /**
+       * Present when the result's value comes from the probed service's own claim rather than
+       * from an independent observation made by this preflight.
+       */
+      evidenceClass?: string;
       status: string;
       httpStatus?: number;
       mode?: string;

@@ -1,5 +1,7 @@
 // Gate C preflight v2. Static configuration and explicit read-only HTTPS probes
 // are separate evidence classes; neither performs a Shopify write or proves the Gate C drill.
+// A probe result may additionally carry an `evidenceClass` marking it as a self-report by the
+// probed service rather than an independent observation by this preflight.
 import { pathToFileURL } from 'node:url';
 import { isIP } from 'node:net';
 
@@ -24,8 +26,13 @@ const activeProbeRequirements = [
   'SHOPIFY_REDIRECT_URI',
   'KILL_SWITCH_STATE_URL',
 ];
+// Controls this preflight cannot prove, named so a reader cannot mistake them for probed evidence.
+// RUNTIME_DATABASE_DDL_PRIVILEGES is in this list because nothing here opens a database connection:
+// the only thing this preflight can read about the runtime role's DDL privileges is the guardrail's
+// own claim about itself. That claim is reported below under an explicit self-report evidence
+// class; it is not an independent verification and must not be counted as one.
 const activeProbeLimitations = [
-  'RUNTIME_DATABASE_DDL_PRIVILEGES',
+  'RUNTIME_DATABASE_DDL_PRIVILEGES_SELF_REPORTED_NOT_INDEPENDENTLY_VERIFIED',
   'KILL_DEPLOYMENT_LOGICAL_INDEPENDENCE',
   'BACKUP_RESTORE_DRILL',
   'SHOPIFY_DEVELOPMENT_STORE_CONNECTIVITY',
@@ -121,7 +128,10 @@ export async function runActiveStagingProbes(env, { fetchImpl = fetch, timeoutMs
     return { status: 'BLOCKED', required: activeProbeRequirements, notProbed: activeProbeLimitations, missing: ['HTTPS endpoints with the exact read-only paths and KILL_SWITCH_READ_TOKEN'], results: [] };
   }
   const probes = [
-    { name: 'GUARDRAIL_DATABASE_WORKSPACE_AND_KILL_READER', url: guardrail, headers: {}, check: (response, body) => response.ok && body.status === 'ready' && body.persistence === 'available' && body.workspaceBinding === 'verified' && body.runtimeRole === 'non-superuser-no-bypassrls' && body.runtimeDdl === 'denied' && body.killReader === 'reachable' },
+    // `workspaceBinding`, `runtimeRole` and `runtimeDdl` are claims the guardrail makes about its
+    // own database session. Reading them over HTTPS proves the guardrail *reports* that state; it
+    // proves nothing about the database itself. Only `killReader` is an independent observation.
+    { name: 'GUARDRAIL_SELF_REPORTED_WORKSPACE_AND_KILL_READER', evidenceClass: 'GUARDRAIL_SELF_REPORTED_NOT_INDEPENDENTLY_VERIFIED', url: guardrail, headers: {}, check: (response, body) => response.ok && body.status === 'ready' && body.persistence === 'available' && body.workspaceBinding === 'verified' && body.runtimeRole === 'non-superuser-no-bypassrls' && body.runtimeDdl === 'denied' && body.killReader === 'reachable' },
     { name: 'SHOPIFY_INGRESS_AND_RECONCILIATION_MODE', url: ingress, headers: {}, check: (response, body) => response.ok && body.status === 'ready' && body.ingressReady === true && body.reconciliationReady === true },
     { name: 'SHOPIFY_OAUTH_CALLBACK_ROUTE', url: callback, headers: {}, check: response => response.status === 403 },
     // `mode` is returned by the independent kill plane (infra/kill-switch/src/server.ts). A
@@ -135,10 +145,10 @@ export async function runActiveStagingProbes(env, { fetchImpl = fetch, timeoutMs
       let body = {};
       try { body = await response.json(); } catch { /* response details are intentionally not retained */ }
       const passed = probe.check(response, body);
-      return { name: probe.name, status: passed ? 'VERIFIED' : 'BLOCKED', httpStatus: response.status,
+      return { name: probe.name, ...(probe.evidenceClass ? { evidenceClass: probe.evidenceClass } : {}), status: passed ? 'VERIFIED' : 'BLOCKED', httpStatus: response.status,
         ...(probe.name === 'SHOPIFY_INGRESS_AND_RECONCILIATION_MODE' && body.reconciliationMode === 'OWNER_MANUAL' ? { mode: 'OWNER_MANUAL', worker: 'MANUAL_ONLY' } : {}) };
     } catch {
-      return { name: probe.name, status: 'BLOCKED', reason: 'UNREACHABLE_OR_INVALID_RESPONSE' };
+      return { name: probe.name, ...(probe.evidenceClass ? { evidenceClass: probe.evidenceClass } : {}), status: 'BLOCKED', reason: 'UNREACHABLE_OR_INVALID_RESPONSE' };
     }
   }));
   return { status: results.every(item => item.status === 'VERIFIED') ? 'PARTIALLY_VERIFIED' : 'BLOCKED', required: activeProbeRequirements, notProbed: activeProbeLimitations, missing: [], results };

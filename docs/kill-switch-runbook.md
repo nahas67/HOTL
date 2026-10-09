@@ -20,6 +20,34 @@ Copy the example environment to `.env.kill-switch` on the independent host, neve
 to a shared source checkout. Configure `HOTL_MODE=live`, a pinned owner allowlist,
 independent Supabase Auth/JWKS URL and a strong state-read token.
 
+## Mode must be set explicitly
+
+`HOTL_MODE` must be present and exactly `live` or `simulation`. The service refuses to
+start otherwise and writes no journal. There is no default: an unset mode used to fall
+back to `simulation`, whose owner token, read token and reauthentication password are the
+demo values published in this repository. That combination made an omitted environment
+variable start a write-capable emergency control with public credentials, so the process
+now fails closed. Any other value — including `Live`, `LIVE`, `production` or an empty
+string — is rejected too.
+
+| `HOTL_MODE` | Result |
+| --- | --- |
+| unset or empty | Startup fails; no listener, no journal, no lock file |
+| anything other than `simulation` / `live` | Startup fails with the same message |
+| `simulation` | Local demo only. Demo credentials and the password-based `/reauth` flow. Never deploy this. |
+| `live` | Deployed emergency plane. Requires independent Supabase URL, pinned owner IDs and a ≥32-character read token, or startup fails. |
+
+The container image pins `HOTL_MODE=live` in its runtime stage, so the deployed path is
+unaffected by this rule. Local development must now opt in explicitly:
+
+```bash
+HOTL_MODE=simulation npm start          # Linux/macOS
+$env:HOTL_MODE='simulation'; npm start  # Windows PowerShell
+```
+
+The repository's own launcher (`pnpm dev`) already exports `HOTL_MODE=simulation` to every
+child process and refuses to start on any other value.
+
 Create the named volume `hotl-emergency-state` once. It must remain persistent across
 releases and have write ownership for the container's `node` user. On the first
 verified empty deployment only, set `KILL_SWITCH_ALLOW_INITIALIZE=true`. Start with:
