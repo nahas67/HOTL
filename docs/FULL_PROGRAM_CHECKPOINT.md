@@ -381,7 +381,104 @@ cached `MARGIN_BELOW_FLOOR` denial even though the emergency plane was engaged. 
 `KILL_SWITCH_ENGAGED`, which is what a test literally titled *"freshly enforces independent kill
 state after restore"* was asserting but did not actually check.
 
-### 0.6.21 Open, deferred
+### 0.6.21 Infrastructure and security gaps closed this round
+
+An independent infra pass closed four verified gaps, each with a test that fails without the fix.
+
+- **DELETE was unaudited on 10 domain tables.** The mutation trigger was `after insert or update`
+  only, so a deletion produced no audit event, contrary to rule 2. It is now `insert or update or
+  delete`, branching on `TG_OP` to read `OLD` (a DELETE trigger has no `NEW`). The drill asserts
+  the trigger is registered as AFTER on all ten tables, that a deletion is journalled with the
+  removed row, and that a DELETE refused by the kill-latch BEFORE trigger leaves **no** event.
+- **The staging preflight contradicted itself.** It listed a control as unprobed while probing it,
+  and its detail text claimed the probe verified database role privileges when it only reads the
+  guardrail's own assertion. Both are now explicit: the probe is named
+  `GUARDRAIL_SELF_REPORTED_WORKSPACE_AND_KILL_READER` and carries an `evidenceClass`.
+  `KILL_DEPLOYMENT_LOGICAL_INDEPENDENCE` stays in the unprobed list because it genuinely is.
+- **The kill switch silently defaulted to simulation with credentials published in this repo.** An
+  unset `HOTL_MODE` now fails closed *before* any listener, journal or lock file is created. The
+  `Dockerfile` already pinned `HOTL_MODE=live` and a test now guards that.
+- **The kill-switch image build never ran on `main`.** Added the push trigger, with a test
+  asserting the workflow still contains no deploy step and no secret.
+
+### 0.7 Cockpit redesign attempt — parked, not shipped
+
+A parallel workstream built a design system (`tokens.css`, `design-system.css`), a primitive layer
+(`ui.tsx`) and a 2,069-line categorized Settings surface (`settings-page.tsx`) with a vertical
+left sidebar. It was **interrupted before completion and regressed six of the eleven core browser
+journeys** — manual product edit, storefront checkout, pause/resume, below-margin approval
+denial, the LangGraph cycle, and expired-proposal replanning.
+
+The decisive evidence: with the redesign parked, `pnpm test:e2e` returns **11/11 in 51 s**; with
+it applied it returned **8 passed in 6.7 minutes** with cascading timeouts. One failure — the pause
+test failing to resume — left the platform paused, which is why every later test reported `halted`
+rather than `interrupted`. The cascade looked like six independent defects and was one.
+
+**The work is preserved, not discarded**: `git stash` entry `in-flight-cockpit-redesign`. It is
+**not** on `main`. A redesign that breaks checkout, pause and approvals is a regression, and
+shipping it to satisfy a request would have been the wrong trade.
+
+The lesson is recorded: a large UI rewrite needs its e2e suite run *during* development. A
+45-second timeout per broken control turned one regression into a 6.7-minute, hard-to-diagnose
+cascade.
+
+### 0.7.1 Verified cockpit defects — still open against `main`
+
+QA exercised every control in a real browser against a live stack and produced
+[`docs/cockpit-control-inventory.md`](../cockpit-control-inventory.md). Highest-value items:
+
+- **[FIX-1] An illustrative chart is captioned as measured.** `RevenueChart` renders
+  `telemetry().synthetic.chart` — the guardrail's fabricated series — captioned *"Measured
+  progress. Every dollar accounted for."* On one screen the panel read **$20,773.00** while the
+  metric card above read **Total revenue $24,782**. The guardrail already ships the correct copy
+  in `synthetic.note`; it is declared in `types.ts` and rendered nowhere.
+- **[FIX-2] `/products` and `/orders` scroll horizontally at 360 px** (671 px and 588 px
+  `scrollWidth`). Existing responsive coverage checks four other routes at 390 px, which is why it
+  was green. The page genuinely pans sideways.
+- **Dishonest availability:** Approve stays enabled while paused. It fails closed server-side, but
+  unlike every other financial control it renders as available when it can never succeed. Reject
+  correctly stays enabled — the guardrail deliberately skips `block()` for rejections.
+- **Accessibility:** the Constitution tablist points `aria-controls` at five unrendered panels; the
+  Approve/Reject/Modify group has no role, label or pressed state, so selection is conveyed by a
+  CSS class alone on a financial action.
+- **A control that lies:** the Ad spend card hardcodes **"Within budget"**, still shown beside
+  "$0.00 remaining" when the ceiling is exceeded.
+
+### 0.7.2 Capabilities that existed but were unreachable — now wired
+
+Four guardrail capabilities had no route through the cockpit proxy, so they were *disconnected
+rather than absent*: `GET /api/campaigns`, `POST /campaigns/:id/pause`,
+`PATCH /api/guardrails/config` (previously GET-only, so the ad-spend ceiling and margin floor could
+be read but never changed), and `GET /api/shopify/webhooks/health`. All four are proxied and
+remain owner-gated by the guardrail; the proxy widens no authority.
+
+Two more — `GET /api/audit-log` (carrying the backend's computed `integrity: "verified"` verdict)
+and `GET /api/operating-state` (pending proposals with `requiredAction`, plus resource revisions) —
+were already proxied and working but **never called by any UI surface**. They still need
+surfacing; the cockpit currently rebuilds that freshness context by hand.
+
+### 0.7.3 A regression the drills caught, and green tests did not
+
+The replay marker added earlier broke six assertions in `postgres-store.test.ts`. That file is
+guarded by `describe.skipIf`, so **26 of its cases never run in the normal suite** — they execute
+only inside the runtime-ledger drill, against real PostgreSQL. `pnpm test` stayed green the whole
+time.
+
+The infra agent found the failing drill, proved it was not its own regression by stashing every one
+of its files, and reported it rather than working around it. That is the system working: the
+assertions were fixed, and the drill is green again —
+
+```text
+Tests  33 passed (33)
+Runtime ledger state/audit MD5 before and after restart: c47b9ee74b482fa1807679ceb54db146
+Restored runtime ledger state/audit MD5:                c47b9ee74b482fa1807679ceb54db146
+Restored RLS, grants, login bindings and append-only denial verified
+```
+
+**A green `pnpm test` did not mean the guardrail suite was green.** That is now recorded rather
+than quietly fixed.
+
+### 0.6.22 Open, deferred
 
 Recorded so the register is complete. None is claimed as done.
 
