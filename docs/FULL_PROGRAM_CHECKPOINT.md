@@ -754,7 +754,29 @@ The selected tab now declares `aria-controls`; inactive tabs declare none; and t
 assert each relationship resolves, plus that exactly one tab is selected at a time.
 **Verified it bites**: restoring the original attribute fails both tests.
 
-### 0.9.3 Open, deferred
+**Attempt 3 — after the EPERM fix changed the baseline, and it substantially validates the
+approach.** Recorded here because the earlier conclusion was wrong and the correction matters.
+
+With the rename retry in place, the awaited-boundary design was rebuilt: `flush()` records a
+staleness refusal instead of throwing, and `put()` — which callers do await — surfaces it. Then the
+decisive experiment:
+
+```text
+orchestrator suite WITHOUT the provocation file:  7 files, all pass, ZERO unhandled errors
+orchestrator suite WITH the provocation file:    all tests pass, 19 unhandled errors
+```
+
+**So the mechanism is sound in normal operation.** The 19 rejections come entirely from
+`checkpoint-multi-instance.test.ts`, which *deliberately* provokes the stale-writer path and leaves
+graph writes in flight that reject during teardown. Rounds 6–7 concluded "neither placement works"
+by conflating the provocation tests with production behaviour; that conclusion was incorrect.
+
+**Withdrawn a third time**, and this is the final attempt without new information. The blocker is
+now precisely stated rather than mysterious: **a next attempt must quiesce the graph inside the
+provocation test before asserting**, so the conflict is provoked deliberately and then drained,
+instead of leaking rejections into teardown. The guard mechanism itself has been validated.
+
+### 0.9.4 Open, deferred
 
 The replay marker added earlier broke six assertions in `postgres-store.test.ts`. That file is
 guarded by `describe.skipIf`, so **26 of its cases never run in the normal suite** — they execute
