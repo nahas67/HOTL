@@ -986,6 +986,7 @@ export function Cockpit({ initialSection }: { initialSection: string }) {
         <ApprovalDialog
           item={approval}
           api={api}
+          paused={paused}
           onClose={closeApproval}
           onResolved={async (result) => {
             if (result.warning) {
@@ -1245,7 +1246,13 @@ function Metrics({ data }: { data: Telemetry }) {
             {money(Math.max(0, data.config.dailyAdSpendCeiling - m.adSpend), 2)}{" "}
             remaining
           </span>
-          <small>Within budget</small>
+          {/* Derived, not hardcoded. Previously this read "Within budget" unconditionally, so it
+              still claimed headroom while showing $0.00 remaining against an exhausted ceiling. */}
+          <small className={m.adSpend > data.config.dailyAdSpendCeiling ? "warn" : undefined}>
+            {m.adSpend > data.config.dailyAdSpendCeiling
+              ? "Ceiling exceeded"
+              : `${pct(data.config.dailyAdSpendCeiling === 0 ? 0 : m.adSpend / data.config.dailyAdSpendCeiling)} of ceiling used`}
+          </small>
         </div>
       </section>
     </div>
@@ -1285,7 +1292,7 @@ function RevenueChart({ data }: { data: Telemetry }) {
       <div
         className="chart-wrap"
         role="img"
-        aria-label={`Revenue and advertising spend for the last ${days} days. Revenue ${money(chartRevenue)}.`}
+        aria-label={`Illustrative revenue and advertising spend for the last ${days} days. This series is illustrative, not observed commerce data. Illustrative total ${money(chartRevenue)}.`}
       >
         <ResponsiveContainer width="100%" height="100%">
           <AreaChart
@@ -1351,7 +1358,11 @@ function RevenueChart({ data }: { data: Telemetry }) {
       </div>
       <div className="chart-caption">
         <TrendingUp size={14} />
-        <span>Measured progress. Every dollar accounted for.</span>
+        {/* This panel plots data.synthetic.chart -- the guardrail's illustrative series, not
+            observed commerce data. The guardrail ships this wording in synthetic.note and it
+            must be rendered verbatim; a local "measured" claim is a rule 6 violation and the
+            headline number here legitimately differs from Total revenue above. */}
+        <span>{data.synthetic.note}</span>
       </div>
     </section>
   );
@@ -2254,11 +2265,13 @@ function ApprovalDialog({
   api,
   onResolved,
   onClose,
+  paused,
 }: {
   item: Interrupt;
   api: Api;
   onResolved: (result: Record<string, unknown>) => Promise<void>;
   onClose: () => void;
+  paused: boolean;
 }) {
   const request = approvalRequest(item);
   const amountKey = approvalAmountKey(item);
@@ -2446,8 +2459,14 @@ function ApprovalDialog({
           )}
           {pending && (
             <>
-              <label className="form-label">Your decision</label>
-              <div className="decision-options">
+              <span className="form-label" id="decision-group-label">
+                Your decision
+              </span>
+              {/* A financial action: which of the three is armed must be conveyed
+                  programmatically, not only by a CSS class. `aria-pressed` does that while
+                  keeping the elements buttons -- the browser e2e contract addresses them by
+                  button role and name, and overriding the role would silently break it. */}
+              <div className="decision-options" role="group" aria-labelledby="decision-group-label">
                 {[
                   { value: "approve", icon: Check, name: "Approve" },
                   { value: "reject", icon: X, name: "Reject" },
@@ -2457,6 +2476,7 @@ function ApprovalDialog({
                   .map((option) => (
                     <button
                       type="button"
+                      aria-pressed={decision === option.value}
                       key={option.value}
                       className={
                         decision === option.value
@@ -2524,7 +2544,17 @@ function ApprovalDialog({
               className={decision === "reject" ? "danger" : "primary"}
               busy={busy}
               disabled={
-                decision !== "reject" && legacy && (!review || !reviewed)
+                // Rejecting remains available while paused on purpose: the guardrail
+                // deliberately skips its block() check for rejections, so it can still
+                // succeed. Approving or modifying cannot, so it is disabled like every
+                // other financial control while the platform is paused.
+                (decision !== "reject" && paused) ||
+                (decision !== "reject" && legacy && (!review || !reviewed))
+              }
+              title={
+                decision !== "reject" && paused
+                  ? "Agents are paused, so this action cannot execute. Reject the request instead, or resume agents first."
+                  : undefined
               }
             >
               {decision === "approve"
