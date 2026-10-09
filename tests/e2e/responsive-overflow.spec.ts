@@ -24,11 +24,11 @@ const ROUTES = ['/', '/agents', '/approvals', '/products', '/orders', '/finance'
 // These two are excluded so the suite stays green while the defect stays visible and
 // tracked. THE FIX IS TO DELETE A ROUTE FROM THIS LIST: the sweep then fails on it
 // immediately until the overflow is genuinely resolved.
-const KNOWN_DEFECT_ROUTES = ['/products', '/orders'];
+const KNOWN_DEFECT_ROUTES: string[] = [];
 
 test.describe('no horizontal overflow on any cockpit route', () => {
   for (const width of [360, 390]) {
-    test(`no route overflows at ${width}px outside the two known defects`, async ({ page }) => {
+    test(`no route overflows at ${width}px`, async ({ page }) => {
       const offenders: string[] = [];
       for (const route of ROUTES.filter(item => !KNOWN_DEFECT_ROUTES.includes(item))) {
         await page.setViewportSize({ width, height: 780 });

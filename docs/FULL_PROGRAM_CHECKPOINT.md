@@ -484,31 +484,38 @@ Four of the audit's findings are fixed against `main` and verified (`516f524`):
    `/products` at 671 px and `/orders` at 587 px, identical before and after, so it was
    reverted rather than left in as cargo cult.
 
-### 0.7.5 Responsive defect — still OPEN, now measured and covered
+### 0.7.5 Responsive defect — ROOT CAUSED AND FIXED
 
-The `/products` and `/orders` horizontal overflow is **not fixed**. Measured with
-`waitUntil: 'networkidle'`:
+The `/products` and `/orders` horizontal overflow is **fixed**. It was not a table-sizing problem.
 
-| Width | Route | `document.scrollWidth` | `body.scrollWidth` | viewport |
-| --- | --- | --- | --- | --- |
-| 360 | `/products` | **671** | 360 | 360 |
-| 360 | `/orders` | **587** | 360 | 360 |
-| 390 | `/products` | **677** | 390 | 390 |
-| 390 | `/orders` | **593** | 390 | 390 |
+**Root cause.** `.sr-only` is `position:absolute` (the standard visually-hidden pattern). Its
+containing block is the nearest *positioned* ancestor — and `.table-scroll`, the element with
+`overflow:auto`, was `position:static`. So the hidden span was **not** clipped by the scroll
+container; it sat at the far end of the 715 px table and extended the document. The table itself
+was always clipped correctly (`right=729` inside a container whose client width is 332) — the
+overflow came entirely from a 1 px element escaping its clip.
 
-All eight other routes measure exactly their viewport at both widths. The overflow escapes
-`body`, so constraining `.table-scroll` has no effect and the cause is still unidentified.
+```css
+/* before */ .table-scroll{overflow:auto}
+/* after  */ .table-scroll{overflow:auto;position:relative}
+```
 
-**A measurement trap is recorded here because it nearly produced false evidence.** My first
-regression test used `waitUntil: 'domcontentloaded'`, which measures before hydration renders the
-page — every route then reported exactly its viewport width and the test **passed against the
-defect it was written to catch**. It passed identically before and after the CSS change, which is
-how the useless change was caught rather than shipped.
+**Two earlier attempts failed and were reverted**, which is why this took three tries:
 
-`tests/e2e/responsive-overflow.spec.ts` now measures with `networkidle`, sweeps **all ten routes**
-at **360 px and 390 px** so a third route breaking is caught, and names the two known-bad routes in
-`KNOWN_DEFECT_ROUTES`. **Deleting a route from that list makes the sweep fail immediately on it** —
-that is the intended fix mechanism, not a way to make the test green.
+1. Adding `max-width`/`min-width` changed the measurements **not at all** (671 px before and
+   after). Reverted rather than left in as cargo cult.
+2. A first regression test used `waitUntil: 'domcontentloaded'`, which measures before hydration
+   renders the page. Every route then reported exactly its viewport width, so the test **passed
+   against the very defect it was written to catch**. It was caught only because it also passed
+   when the change was reverted — which is precisely the check that exposes a useless test.
+
+Measured after the fix at 360 px: `/products` `document.scrollWidth` **360**, `/orders` **360** —
+exactly the viewport.
+
+`tests/e2e/responsive-overflow.spec.ts` now sweeps **all ten routes at 360 px and 390 px** with
+`networkidle`, and `KNOWN_DEFECT_ROUTES` is **empty**. **Verified it bites**: with the fix reverted
+the sweep fails and names `/products document=671`, `/orders document=587` at 360 px and
+`677`/`593` at 390 px. A future route that overflows will fail this test.
 
 ### 0.7.6 Open, deferred
 
