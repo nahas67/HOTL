@@ -517,7 +517,71 @@ exactly the viewport.
 the sweep fails and names `/products document=671`, `/orders document=587` at 360 px and
 `677`/`593` at 390 px. A future route that overflows will fail this test.
 
-### 0.7.6 Open, deferred
+### 0.7.7 Cross-process guarantees — now proven, and two real defects surfaced
+
+Guarantees that had only ever been tested with two engines **in one process** are now exercised
+across **real OS processes**, coordinated by a filesystem barrier with deadline polling (no timing
+sleeps; 3.2 s total, stable over three runs).
+
+- **`ledger-multiprocess`** — the file-backed ledger mutex across three processes. The decisive
+  case asserts `STATE_BUSY` while a real lock is held and success after release; the contention
+  is genuine (310/343/310 cross-process retries measured), and 3 processes × 3 × $25 against a
+  $100 ceiling yields exactly 4 allows and 5 denials with the issued reservation set equal to the
+  persisted one — no loss, no double-issue.
+- **`journal-multiprocess`** — kill-journal single-writer across real processes. Exactly one
+  winner, every loser matching `/^EEXIST:/`, and the surviving journal must contain exactly
+  `['initialized','engaged']`. A split writer produces two `initialized` sentinels and the journal
+  then refuses to load — bricking the emergency plane.
+- **`checkpoint-multi-instance`** — 2 pinning tests and 2 explicitly labelled characterization
+  tests.
+
+### 0.7.8 D2 — an orphaned ledger lock stranded the workspace. FIXED
+
+`engine.ts` released its lock in a `finally`. A writer hard-killed by `SIGKILL` or power loss never
+reaches it, so `state.json.lock` survived and **every** later transaction returned `STATE_BUSY`
+forever, with no automated recovery. It fails closed — safe, not a breach — but it is an
+availability incident on the financial ledger needing a human to delete a file, and the kill
+journal already recorded its pid for exactly this reason while the ledger lock did not.
+
+The lock now records `process.pid` on acquisition, and an `EEXIST` lock is reclaimed **only** when
+its recorded owner is provably gone (`process.kill(pid,0)` → `ESRCH`). Anything uncertain —
+unreadable, empty, non-numeric, or `EPERM` (alive but not ours to signal) — still denies.
+Recovery is never inferred from age.
+
+`apps/guardrail-service/test/lock-recovery.test.ts` — 4 cases. **Verified it bites**: removing the
+recovery fails the dead-owner case while all three fail-closed cases still pass.
+
+### 0.7.9 D1 — orchestrator checkpoint writers have no mutual exclusion. OPEN
+
+`checkpointer.ts` `flush()` rewrites the instance's **entire** in-memory storage and renames it
+over the shared file, with no lock, no read-merge and no conflict detection. Measured behaviour:
+
+```text
+after A: ['t1']   after B: ['t2']   <- t1 destroyed
+after A: ['t1','t3']  <- t2 destroyed
+fresh reader sees t2: false
+```
+
+This is **total last-writer-wins across the whole thread set**, not merely threads the second
+instance never saw: two live workers destroy each other's checkpoints on **every write**. An owner
+can find a run gone and `get()` rejects with 404 after a restart.
+
+**It is not a double-spend.** The financial defence is guardrail idempotency on a deterministic
+action key, already proven by `graph.test.ts` ("replays the saved action key after a response is
+lost across a checkpoint restart"). This is an **availability and auditability** failure.
+Production is protected today only by the single-process topology and by `createCheckpointer()`
+refusing to build a `FileSaver` outside simulation without `DATABASE_URL` — a correct guard worth
+keeping. `checkpoint-multi-instance.test.ts` is a permanent witness: **it will fail when a fix
+lands**, and that is intentional.
+
+### 0.7.10 D3 — unlocked ledger reads. OBSERVATION, not reproduced
+
+`snapshot()` and `telemetry()` read without taking the lock, while `transaction()` correctly
+snapshots inside it. On Windows/OneDrive a reader can collide with the rename. The ten-retry
+EPERM/EACCES/EBUSY loop covers writers only. **Not reproduced** in the contention runs, so it is
+recorded as an observation rather than a confirmed defect.
+
+### 0.7.11 Open, deferred
 
 The replay marker added earlier broke six assertions in `postgres-store.test.ts`. That file is
 guarded by `describe.skipIf`, so **26 of its cases never run in the normal suite** — they execute

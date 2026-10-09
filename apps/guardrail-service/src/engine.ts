@@ -161,6 +161,26 @@ export class GuardrailEngine {
     this.verify(this.state);
     return structuredClone(this.state);
   }
+  /**
+   * True only when the lock file provably belongs to a process that no longer exists.
+   * Anything uncertain -- unreadable, empty, not a number, or a pid we cannot probe -- returns
+   * false so the caller denies. Never assumes a lock is abandoned because it is old.
+   */
+  private async orphaned(lockPath:string):Promise<boolean> {
+    try {
+      const recorded=(await readFile(lockPath,'utf8')).trim();
+      if(!/^\d+$/.test(recorded))return false;
+      const owner=Number(recorded);
+      if(owner===process.pid)return false;
+      try {process.kill(owner,0);return false;}
+      catch(error) {
+        const code=(error as NodeJS.ErrnoException).code;
+        // ESRCH: definitively gone. EPERM: alive but not ours to signal -- treat as held.
+        return code==='ESRCH';
+      }
+    } catch {return false;}
+  }
+
   private async applyTransaction(state:EngineState,operation:string,payload:unknown,actor:Actor,key:string,action:(state:EngineState)=>Promise<Result>|Result) {
     const fingerprint=digest({operation,payload,actor,mode:this.mode});
     // The persisted key format is deliberately unchanged. `state.idempotency` is part of the
@@ -218,13 +238,23 @@ export class GuardrailEngine {
       let handle:Awaited<ReturnType<typeof open>>|undefined;
       const lockPath=this.options.filePath ? `${this.options.filePath}.lock` : undefined;
       if(lockPath) {
-        try {handle=await open(lockPath,'wx');}
+        try {handle=await open(lockPath,'wx');await handle.writeFile(String(process.pid));await handle.sync();}
         catch(error) {
           const code=(error as NodeJS.ErrnoException).code;
           // Windows may report a sharing/delete-pending lock as a permission error.
           // All acquisition failures deny execution; these can be retried with the same key.
-          if(code==='EEXIST'||process.platform==='win32'&&['EPERM','EACCES','EBUSY'].includes(code??'')) throw new GuardrailError('STATE_BUSY','The guardrail state lock is unavailable; retry with the same key.',503);
-          throw error;
+          if(code==='EEXIST'||process.platform==='win32'&&['EPERM','EACCES','EBUSY'].includes(code??'')) {
+            // A writer that is hard-killed (SIGKILL, power loss) never reaches its `finally`
+            // and leaves the lock behind, which would otherwise return STATE_BUSY forever with
+            // no automated recovery. Mirrors the kill journal, which records its pid. Recovery
+            // is allowed ONLY for a provably dead owner: an unreadable, empty or foreign lock
+            // still denies, so an uncertain situation fails closed.
+            if(code==='EEXIST'&&await this.orphaned(lockPath)) {
+              try {await unlink(lockPath);} catch {throw new GuardrailError('STATE_BUSY','The guardrail state lock is unavailable; retry with the same key.',503);}
+              try {handle=await open(lockPath,'wx');await handle.writeFile(String(process.pid));await handle.sync();}
+              catch {throw new GuardrailError('STATE_BUSY','The guardrail state lock is unavailable; retry with the same key.',503);}
+            } else throw new GuardrailError('STATE_BUSY','The guardrail state lock is unavailable; retry with the same key.',503);
+          } else throw error;
         }
       }
       try {
