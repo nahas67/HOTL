@@ -62,8 +62,8 @@ export function buildStagingReadinessRows(
     },
     {
       label: "Isolated PostgreSQL workspace and runtime role",
-      status: configurationStatus(["GUARDRAIL_DATABASE_URL", "GUARDRAIL_WORKSPACE_ID", "GUARDRAIL_INITIALIZE_EMPTY_DATABASE", "GUARDRAIL_INITIALIZE_EMPTY_FILE"], "GUARDRAIL_DATABASE_WORKSPACE_AND_KILL_READER"),
-      detail: "A passing read-only probe checks workspace binding and role privileges; hosted isolation and restore evidence remain separate.",
+      status: configurationStatus(["GUARDRAIL_DATABASE_URL", "GUARDRAIL_WORKSPACE_ID", "GUARDRAIL_INITIALIZE_EMPTY_DATABASE", "GUARDRAIL_INITIALIZE_EMPTY_FILE"], "GUARDRAIL_SELF_REPORTED_WORKSPACE_AND_KILL_READER"),
+      detail: "This probe reads the guardrail's OWN claim about its workspace binding and role privileges; it is self-reported, not independently verified against the database. Hosted isolation, RLS and restore evidence remain separate.",
     },
     {
       label: "Owner and agent identity",

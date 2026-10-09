@@ -348,7 +348,7 @@ describe.skipIf(!enabled)(
             marketing,
             "persisted-campaign",
           ),
-        ).toEqual(allowed);
+        ).toEqual({ ...allowed, replayed: true });
         expect(await restarted.snapshot()).toEqual(beforeReplay);
         await expect(
           restarted.launchCampaign(
@@ -491,7 +491,7 @@ describe.skipIf(!enabled)(
         const restarted = await engine(workspaceId);
         expect(
           await restarted.checkout(cart, owner, "database-checkout"),
-        ).toEqual(placed);
+        ).toEqual({ ...placed, replayed: true });
         const supplier = await restarted.placeSupplierOrder(
           {
             productId: product.id,
@@ -651,7 +651,7 @@ describe.skipIf(!enabled)(
             owner,
             "retry-campaign-after-audit-failure",
           ),
-        ).toEqual(allowed);
+        ).toEqual({ ...allowed, replayed: true });
         expect(await first.snapshot()).toEqual(committed);
         expect(await auditMirror(workspaceId)).toEqual(committed.audit);
       });
@@ -724,7 +724,7 @@ describe.skipIf(!enabled)(
               owner,
               "before-stop",
             ),
-          ).toEqual(reserved);
+          ).toEqual({ ...reserved, replayed: true });
           expect(await restarted.snapshot()).toEqual(after);
         },
       );
@@ -765,7 +765,7 @@ describe.skipIf(!enabled)(
         expect(await first.snapshot()).toEqual(before);
         expect(
           await first.launchCampaign(request, owner, "before-database-loss"),
-        ).toEqual(allowed);
+        ).toEqual({ ...allowed, replayed: true });
         expect(await auditMirror(workspaceId)).toEqual(before.audit);
       });
     });
