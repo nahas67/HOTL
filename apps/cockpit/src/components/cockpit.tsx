@@ -939,6 +939,7 @@ export function Cockpit({ initialSection }: { initialSection: string }) {
                   ))}
                   <ActivityPage
                     activity={data.activity}
+                    api={api}
                     onDetail={(item) => setDetail({ kind: "activity", item })}
                   />
                 </>
@@ -2220,11 +2221,77 @@ function GuardrailsPage({
   );
 }
 
+function AuditIntegrityPanel({ api }: { api: Api }) {
+  const [state, setState] = useState<
+    | { status: "loading" }
+    | { status: "error"; message: string }
+    | { status: "ready"; integrity: string; entries: number; head: string | null }
+  >({ status: "loading" });
+
+  const load = useCallback(async () => {
+    setState({ status: "loading" });
+    try {
+      const data = await api("audit-log");
+      const entries = Array.isArray(data.entries) ? (data.entries as Activity[]) : [];
+      const last = entries.length ? entries[entries.length - 1] : null;
+      setState({
+        status: "ready",
+        integrity: String(data.integrity ?? "UNKNOWN"),
+        entries: entries.length,
+        head: last?.hash ?? null,
+      });
+    } catch (error) {
+      // Fail honestly: an unreadable audit log must not render as healthy.
+      setState({ status: "error", message: error instanceof Error ? error.message : "The audit log could not be read." });
+    }
+  }, [api]);
+
+  useEffect(() => { void load(); }, [load]);
+
+  const verified = state.status === "ready" && state.integrity === "verified";
+  return (
+    <section className="panel" aria-labelledby="audit-integrity-title">
+      <div className="panel-header">
+        <div>
+          <h2 id="audit-integrity-title">Audit chain integrity</h2>
+          <p className="panel-subtitle">
+            The guardrail re-derives every hash and link when it serves this log. The verdict
+            below is computed by the service, not by this page.
+          </p>
+        </div>
+        <Button type="button" onClick={() => void load()}>Re-verify chain</Button>
+      </div>
+      {state.status === "loading" && <div className="empty-state">Verifying the audit chain...</div>}
+      {state.status === "error" && (
+        <div className="os-notice os-error" role="alert">
+          <TriangleAlert size={17} />
+          <span>{state.message} The chain could not be verified, so its state is unknown.</span>
+        </div>
+      )}
+      {state.status === "ready" && (
+        <div className="metric-context">
+          <span className={verified ? undefined : "warn"}>
+            <strong>{verified ? "Chain verified" : `Chain state: ${state.integrity}`}</strong>
+          </span>
+          <span className="neutral">{state.entries} entries returned by the guardrail</span>
+          <small>
+            {state.head
+              ? `Head ${state.head.slice(0, 12)}...`
+              : "No entries returned"}
+          </small>
+        </div>
+      )}
+    </section>
+  );
+}
+
 function ActivityPage({
   activity,
+  api,
   onDetail,
 }: {
   activity: Activity[];
+  api: Api;
   onDetail: (item: Activity) => void;
 }) {
   const [search, setSearch] = useState("");
@@ -2255,6 +2322,7 @@ function ActivityPage({
           count={filtered.length}
         />
       </section>
+      <AuditIntegrityPanel api={api} />
       <ActivityPanel activity={filtered} onDetail={onDetail} />
     </>
   );

@@ -612,7 +612,26 @@ snapshots inside it. On Windows/OneDrive a reader can collide with the rename. T
 EPERM/EACCES/EBUSY loop covers writers only. **Not reproduced** in the contention runs, so it is
 recorded as an observation rather than a confirmed defect.
 
-### 0.7.11 Open, deferred
+### 0.7.12 A computed control that no surface displayed — now surfaced
+
+`GET /api/audit-log` returns the entries **and the guardrail's own `integrity: "verified"`
+verdict**, which the service recomputes on every load. The cockpit proxied the route and
+**nothing called it**. The Activity page showed individual `hash`/`prevHash` values in its detail
+dialog while the service's actual verdict — the thing that says whether the chain is intact —
+was never rendered, and there was no control to re-verify.
+
+The Activity page now carries an **Audit chain integrity** panel. It states plainly that the
+verdict is the service's, not the page's, exposes a **Re-verify chain** action that issues a real
+request, and **fails honestly**: if the log cannot be read it renders an alert and never claims
+the chain is verified.
+
+`tests/e2e/audit-integrity.spec.ts` — 2 cases. The first asserts the verdict renders and that
+re-verify performs a genuine request (measured via resource timing, not by assuming). The second
+aborts the route and asserts the page shows an alert and **never** says "Chain verified" while the
+state is unknown. This is the same honesty discipline applied to the revenue chart: an unknown
+control must not render as a healthy one.
+
+### 0.7.13 Open, deferred
 
 The replay marker added earlier broke six assertions in `postgres-store.test.ts`. That file is
 guarded by `describe.skipIf`, so **26 of its cases never run in the normal suite** — they execute
