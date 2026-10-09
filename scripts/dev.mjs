@@ -68,6 +68,7 @@ try {
   if (error.code !== "ENOENT") throw error;
 }
 const children = [];
+const recentOutput = new Map();
 let stopping = false;
 function start(label, args, cwd = root) {
   const child = spawn(process.execPath, args, {
@@ -76,12 +77,29 @@ function start(label, args, cwd = root) {
     windowsHide: true,
     stdio: ["ignore", "pipe", "pipe"],
   });
+  // Keep the tail of each child's own output. When one exits, dev.mjs tears down the whole
+  // stack and every later check fails with ECONNREFUSED, which reads as a cascade of unrelated
+  // failures. On 2026-09-10 that hid an orchestrator crash for five rounds because the child's
+  // real error was never surfaced next to the teardown notice.
+  recentOutput.set(label, []);
+  for (const stream of [child.stdout, child.stderr])
+    stream.on("data", (data) => {
+      const text = String(data);
+      const lines = recentOutput.get(label);
+      for (const line of text.split(/\r?\n/)) if (line.trim()) lines.push(line);
+      if (lines.length > 40) lines.splice(0, lines.length - 40);
+      process.stdout.write(`[${label}] ${text}`);
+    });
   for (const stream of [child.stdout, child.stderr])
     stream.on("data", (data) => process.stdout.write(`[${label}] ${data}`));
-  child.on("exit", (code) => {
-    if (!stopping && code) {
-      console.error(`${label} exited (${code}). Stopping local stack.`);
-      stop(code);
+  child.on("exit", (code, signal) => {
+    if (!stopping && (code || signal)) {
+      console.error(`\n========== ${label} EXITED (${code ?? signal}) ==========`);
+      console.error("Last output from this service -- this is the cause, not the ECONNREFUSED");
+      console.error("errors that follow from the teardown:");
+      for (const line of recentOutput.get(label) ?? []) console.error(`  ${line}`);
+      console.error(`===========================================================\n`);
+      stop(code ?? 1);
     }
   });
   children.push(child);

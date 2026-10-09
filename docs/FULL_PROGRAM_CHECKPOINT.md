@@ -703,9 +703,18 @@ independent defects. It also means a red run is not 6–9 problems, it is **one 
 | `platform.spec` alone is flaky | 2× in isolation | **6/6 both times** — not it. |
 | `operating-system` + `platform` together | 2× | **10/10 both times** — not it. |
 
-**Still open:** the trigger needs the wider suite context. The next step is to capture the
-orchestrator's own stderr on exit rather than Playwright's summary line — the process is dying
-with a real error that has never been seen.
+**Still open: why the orchestrator exits.** After the cascade was identified, four consecutive full
+runs passed **20/20**, so the crash is genuinely intermittent and did not reproduce. It is also
+**not** resource exhaustion: the crash run and the clean runs both had 35 node processes and
+4.7 GB free, so process count does not explain it. It is recorded as unexplained rather than
+resolved, because claiming a fix for something that stopped happening would be false confidence.
+
+**The harness is what hid it, and that part is fixed.** `scripts/dev.mjs` captured every child's
+stdout/stderr but never associated it with the exit, so the only visible line was
+`orchestrator exited (1)` and the real error scrolled past. On a child exit the harness now prints
+a delimited block naming the service, its exit code or signal, and **its last 40 lines of output**,
+labelled as the cause rather than the `ECONNREFUSED` noise that follows the teardown. Next
+occurrence will be diagnosable in one look instead of five rounds.
 
 ### 0.9.2 Constitution tablist pointed at panels that were never rendered — fixed
 
