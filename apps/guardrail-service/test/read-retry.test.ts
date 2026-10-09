@@ -73,7 +73,9 @@ describe('persisted read tolerates a transient Windows sharing collision', () =>
       // POSIX: an EPERM read is a real permission fault, not a sharing collision, so it is
       // surfaced immediately. The state must still fail closed rather than be served from cache.
       await expect(engine.snapshot()).rejects.toMatchObject({ code: 'EPERM' });
-      expect(transientFailures, 'a non-transient-platform fault is not retried').toBe(2);
+      // Exactly one attempt was made. A retry loop would have consumed the second armed
+      // failure too; consuming only one is what proves the read was not retried here.
+      expect(transientFailures, 'a genuine permission fault is surfaced, not retried').toBe(1);
     }
   });
 
@@ -101,9 +103,11 @@ describe('persisted read tolerates a transient Windows sharing collision', () =>
     // More failures than the retry budget: it must surface an error, not loop.
     transientFailures = 50;
     await expect(engine.snapshot()).rejects.toBeTruthy();
-    // Bounded means bounded: at most the retry budget is consumed, never all 50.
+    // Bounded means bounded: the budget is consumed and then the error is surfaced, so the
+    // 50 armed failures are never all spent spinning.
     expect(transientFailures).toBeGreaterThan(0);
-    if (RETRIES_TRANSIENT_READS) expect(transientFailures).toBeLessThan(50);
-    else expect(transientFailures, 'not retried off Windows').toBe(50);
+    expect(transientFailures).toBeLessThan(50);
+    // Off Windows the read is not retried at all, so exactly the one attempt is consumed.
+    if (!RETRIES_TRANSIENT_READS) expect(transientFailures, 'not retried off Windows').toBe(49);
   });
 });
