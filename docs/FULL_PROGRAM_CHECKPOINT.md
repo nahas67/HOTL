@@ -1201,6 +1201,20 @@ This is now the **sixth** instance of one pattern, and the repository keeps prod
 
 **A green local run is not evidence of a green runner.** Any future checkpoint that records local-only evidence for a concurrency, platform or packaging property should be treated as unverified until a runner has confirmed it.
 
+### Registry resolution — verified equivalent sources · prepared 2026-10-10
+
+`auth.docker.io` answers normally from an ordinary machine, so this is rate-limiting/outage specific to the shared GitHub runner IP pool, not a global registry outage. Three replacements were pulled and **compared by digest**, so equivalence is proven rather than assumed:
+
+| Image in use | Replacement | Digest (identical in both registries) |
+| --- | --- | --- |
+| `node:22-alpine` | `public.ecr.aws/docker/library/node:22-alpine` | `sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402` |
+| `postgres:16-alpine` | `public.ecr.aws/docker/library/postgres:16-alpine` | `sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea` |
+| `zricethezav/gitleaks:v8.28.0` | `ghcr.io/gitleaks/gitleaks:v8.28.0` | `sha256:cdbb7c955abce02001a9f6c9f602fb195b7fadc1e812065883f695d1eeaba854` |
+
+AWS ECR Public serves the Docker **official library** images and is not subject to the same anonymous-pull limit. `gitleaks` is a third-party image and is **not** on ECR Public, but the gitleaks project publishes the identical image to `ghcr.io`, which runners reach without Docker Hub. Pinning by digest makes the build deterministic and prevents it drifting back to Docker Hub on a later "simplification".
+
+Both PostgreSQL drills, the credential scan, the real cross-process kill-switch tests and the image build **stay in place**. Any retry is bounded and can never convert a failure into a pass.
+
 ## 8.3 Verification — forced, uncached, this machine
 
 `scripts/verify-suite.ps1` forces typecheck and the turbo tests so a cache hit can never be presented as evidence.
@@ -1240,7 +1254,7 @@ The IPC defect was reproduced **deterministically** rather than won on a timing 
 | N3 | **The PS1 drill scripts had never passed on any machine.** They had been reported as passing on 2026-10-08, which could only have been the `.sh` scripts on Linux. The Windows path was silently unverified. | Fixed |
 | N4 | **In-process concurrency tests cannot model cross-process locks.** The repo now has genuine multi-OS-process drills for the ledger and the kill journal; other concurrency claims remain in-process only and should not be read as cross-process proof. | `[ ]` |
 | N5 | **PR #2 is redundant** (superseded by PR #3) and **PR #4 is docs-only and still open**. Both await an owner decision. | `[ ]` 🚨 owner |
-| N6 | **Docker Hub is unreachable from the GitHub runners.** Every container step fails while authenticating: `429 Too Many Requests`, then `504 Gateway Timeout`, then `context deadline exceeded` against `auth.docker.io`. This blocks the kill-switch image build, both Postgres drills and the gitleaks scan. **It is external infrastructure, not a defect**, and the same drills pass on this machine. The steps were deliberately **left in place** — removing them would drop the checks the workflows exist to perform. | `[ ]` 🚨 external |
+| N6 | **Docker Hub is unreachable from the GitHub runners.** Every container step fails while authenticating: `429 Too Many Requests`, then `504 Gateway Timeout`, then `context deadline exceeded` against `auth.docker.io`. This blocks the kill-switch image build, both Postgres drills and the gitleaks scan. **It is external infrastructure, not a defect**, and the same drills pass on this machine. The steps were deliberately **left in place** — removing them would drop the checks the workflows exist to perform. | `[ ]` 🚨 external — resolution prepared, §8.2.2 |
 | N7 | **The kill-switch image has therefore never actually been built by CI.** `independent-deployment.test.ts` asserts the workflow *contains* a build step; that assertion passed while the build itself was failing. A workflow that asserts on its own configuration is not the same as the configuration working. | `[ ]` 🚨 |
 | N8 | **The gitleaks scan has not run** since these repairs landed, because it is a `docker run` step. The exposed PAT named in D1 must still be treated as disclosed regardless. | `[ ]` 🚨 |
 
