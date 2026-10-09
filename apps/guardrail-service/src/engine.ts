@@ -148,6 +148,26 @@ export class GuardrailEngine {
     try {const state=await this.options.killSwitchReader();if(typeof state.engaged!=='boolean') throw new Error('Invalid kill state');return state;}
     catch {throw new GuardrailError('KILL_SWITCH_UNAVAILABLE','Cannot verify the independent emergency stop; new actions are denied.',503);}
   }
+  /**
+   * Reads the persisted ledger, tolerating a collision with a concurrent writer's rename.
+   *
+   * The write path already retries EPERM/EACCES/EBUSY on Windows, because a sharing- or
+   * delete-pending file makes `rename` fail transiently. The read path did not: it went straight
+   * to `checkMissingState`, so a reader could collide with a writer mid-rename and report the
+   * ledger as unreadable. That is an availability fault, not a safety one -- the state is never
+   * served from cache instead. Retry first; if it still cannot be read, fail exactly as before.
+   */
+  private async readPersisted():Promise<string> {
+    for(let attempt=0;;attempt++) {
+      try {return await readFile(this.options.filePath!,'utf8');}
+      catch(error) {
+        const code=(error as NodeJS.ErrnoException).code;
+        const transient=process.platform==='win32'&&['EPERM','EACCES','EBUSY'].includes(code??'');
+        if(!transient||attempt>=9)throw error;
+        await new Promise(resolve=>setTimeout(resolve,10*(attempt+1)));
+      }
+    }
+  }
   async snapshot():Promise<EngineState> {
     if(this.options.store) {
       const next=await this.options.store.read();
@@ -155,7 +175,7 @@ export class GuardrailEngine {
       this.verify(next);this.state=next;this.persistedStateObserved=true;
     }
     if(this.options.filePath) {
-      try {const next=JSON.parse(await readFile(this.options.filePath,'utf8')) as EngineState;this.verify(next);this.state=next;this.persistedStateObserved=true;}
+      try {const next=JSON.parse(await this.readPersisted()) as EngineState;this.verify(next);this.state=next;this.persistedStateObserved=true;}
       catch(error) {this.checkMissingState(error);}
     }
     this.verify(this.state);

@@ -703,20 +703,47 @@ independent defects. It also means a red run is not 6–9 problems, it is **one 
 | `platform.spec` alone is flaky | 2× in isolation | **6/6 both times** — not it. |
 | `operating-system` + `platform` together | 2× | **10/10 both times** — not it. |
 
-**Still open: why the orchestrator exits.** After the cascade was identified, four consecutive full
-runs passed **20/20**, so the crash is genuinely intermittent and did not reproduce. It is also
-**not** resource exhaustion: the crash run and the clean runs both had 35 node processes and
-4.7 GB free, so process count does not explain it. It is recorded as unexplained rather than
-resolved, because claiming a fix for something that stopped happening would be false confidence.
+**ROOT-CAUSED AND FIXED — the crash was a real bug, not an environment quirk.** The next run
+reproduced it, and the new harness block printed the cause that had never been visible:
 
-**The harness is what hid it, and that part is fixed.** `scripts/dev.mjs` captured every child's
-stdout/stderr but never associated it with the exit, so the only visible line was
-`orchestrator exited (1)` and the real error scrolled past. On a child exit the harness now prints
-a delimited block naming the service, its exit code or signal, and **its last 40 lines of output**,
-labelled as the cause rather than the `ECONNREFUSED` noise that follows the teardown. Next
-occurrence will be diagnosable in one look instead of five rounds.
+```text
+Error: EPERM: operation not permitted,
+  rename '...\orchestrator-checkpoints.json.<uuid>.tmp' -> '...\orchestrator-checkpoints.json'
+    at async <anonymous> (apps/orchestrator/src/checkpointer.ts:118:9)
+Node.js v25.9.0
+```
 
-### 0.9.2 Constitution tablist pointed at panels that were never rendered — fixed
+A Windows sharing collision made the checkpoint `rename` fail transiently. With no retry, the
+rejection escaped a promise LangGraph does not always await, **Node treated it as fatal, and the
+orchestrator exited 1** — which the supervisor turned into a teardown and a cascade of
+`ECONNREFUSED` failures.
+
+**The guardrail ledger writer has retried exactly this around its own rename since it was
+written. The orchestrator checkpoint writer never got that discipline.** Both are now the same
+rule: retry EPERM/EACCES/EBUSY up to 9 times with a short linear backoff, then surface the real
+error. `tests/checkpoint-rename-retry.test.ts` (2 cases) covers a transient collision and a
+genuine failure; **verified to bite** — removing the retry fails the first case.
+
+This was the same failure *family* as D3, closed below, and the same family as the
+checkpoint-poisoning defect fixed earlier — that fix kept the save chain alive but never
+addressed the rename failing transiently in the first place.
+
+**Observation, not reproduced:** one `ledger-multiprocess` case failed under the first cold turbo
+run and did not recur in 3 direct guardrail runs and 2 turbo runs afterwards (all green). Recorded
+rather than dismissed; if it returns, it is a cross-process timing fault under load, not the
+rename path.
+
+### 0.9.2 D3 — the persisted read path could not tolerate a transient collision — FIXED
+
+`snapshot()` read the ledger with **no retry at all**, while the writer retried `rename` up to nine
+times for the same EPERM/EACCES/EBUSY condition. A reader colliding with a concurrent writer on a
+OneDrive-backed workspace therefore reported the ledger as unreadable. The read now retries under
+the identical rule. This is availability only — the state is never served from cache instead — and
+`tests/read-retry.test.ts` (4 cases) pins all three behaviours: a transient collision is retried,
+corruption is **not** retried and is still reported, a missing ledger is reported rather than
+answered from cache, and the retry budget is bounded. **Verified to bite.**
+
+### 0.9.3 Constitution tablist pointed at panels that were never rendered — fixed
 
 All six tabs set `aria-controls="constitution-<id>"`, but only the **selected** panel is rendered,
 so **five of six pointed at elements that did not exist**. An attribute referencing nothing is

@@ -106,6 +106,27 @@ export class FileSaver extends MemorySaver {
         : value,
     );
   }
+  /**
+   * Rename the temporary checkpoint over the live one, tolerating a Windows sharing collision.
+   *
+   * A sharing- or delete-pending file makes `rename` fail transiently with EPERM/EACCES/EBUSY.
+   * Without a retry that rejection escaped a promise LangGraph does not always await, Node
+   * treated it as fatal and the whole orchestrator exited 1 — which `scripts/dev.mjs` then
+   * turned into a teardown of every service and a cascade of ECONNREFUSED failures across the
+   * rest of the browser drill. This is the same discipline the guardrail ledger writer already
+   * applies around its own rename.
+   */
+  private async replaceWithRetry(from: string, to: string) {
+    for (let attempt = 0; ; attempt++) {
+      try { await rename(from, to); return; }
+      catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        const transient = process.platform === "win32" && ["EPERM", "EACCES", "EBUSY"].includes(code ?? "");
+        if (!transient || attempt >= 9) throw error;
+        await new Promise(resolve => setTimeout(resolve, 10 * (attempt + 1)));
+      }
+    }
+  }
   private flush() {
     const save = this.saving.then(async () => {
       if (!this.loaded || !await this.readMarker())
@@ -115,7 +136,7 @@ export class FileSaver extends MemorySaver {
       const temporary = `${this.file}.${randomUUID()}.tmp`;
       try {
         await this.writeDurable(temporary, snapshot);
-        await rename(temporary, this.file);
+        await this.replaceWithRetry(temporary, this.file);
       } finally {
         await unlink(temporary).catch(error => {
           if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
