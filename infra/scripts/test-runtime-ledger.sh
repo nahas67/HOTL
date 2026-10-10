@@ -58,7 +58,16 @@ trap 'exit 143' TERM
 # Trust authentication is for this disposable test only. Docker publishes its
 # randomly selected port exclusively on host loopback, never on 0.0.0.0.
 network_id="$(docker network create --label "${ownership_label}=${drill_id}" "$network_name")"
-container_id="$(docker create --name "$container_name" \
+# The command substitution below is deliberately NOT wrapped in double quotes.
+#
+# `container_id="$(docker create ... \` continuing across backslash-newlines and ending with a
+# quoted `"$var")"` does not parse: bash fails with "unexpected EOF while looking for matching
+# `"'" and the whole drill dies before it starts. Verified with `bash -n` against this exact
+# file; the same construct with the inner quotes replaced by `"${var}"` fails identically, so it
+# is the outer quote wrapping a multi-line `$(` that is at fault, not the variable expansion.
+# `docker create` prints only a container id, so there is nothing for word splitting to damage.
+# Do not "restore" the outer quotes.
+container_id=$(docker create --name "$container_name" \
   --label "${ownership_label}=${drill_id}" --network "$network_id" \
   --publish '127.0.0.1::5432' \
   --env POSTGRES_HOST_AUTH_METHOD=trust \

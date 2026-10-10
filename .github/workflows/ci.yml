@@ -102,9 +102,18 @@ jobs:
           #     other than success returns the failing command's own non-zero exit code.
           #   * Only registry/network transient output is retried. A genuine assertion or
           #     migration failure fails immediately instead of being retried three times.
+          #
+          # `unexpected EOF` is deliberately NOT a transient signature. A genuine network stream
+          # cut says "unexpected EOF", but so does a shell parse error: in run 38006425415 a
+          # quoting defect inside a drill script was retried twice, burning 45 seconds, before
+          # failing on a cause that retrying could never fix. A code defect must fail on the
+          # first attempt rather than be disguised as flakiness.
           attempts=3
           base_sleep=15
-          transient='429 Too Many Requests|toomanyrequests|502 Bad Gateway|503 Service Unavailable|504 Gateway Timeout|context deadline exceeded|TLS handshake timeout|i/o timeout|connection reset by peer|failed to resolve reference|failed to (pull|resolve) image|unexpected EOF'
+          transient='429 Too Many Requests|toomanyrequests|502 Bad Gateway|503 Service Unavailable|504 Gateway Timeout|context deadline exceeded|TLS handshake timeout|i/o timeout|connection reset by peer|failed to resolve reference|failed to (pull|resolve) image'
+          # Defects in this repository, not conditions of the network. Checked first, so these
+          # fail immediately even when some other line of the same log looks transient.
+          nontransient='syntax error|unexpected EOF while looking for matching|command not found'
 
           run_container_check() {
             local label="$1"; shift
@@ -124,6 +133,10 @@ jobs:
               fi
               if [[ "$attempt" -ge "$attempts" ]]; then
                 printf '[container-check] %s: FAILED after %d attempts (exit %d); not retrying further\n' "$label" "$attempt" "$status"
+                return "$status"
+              fi
+              if grep -Eqi "$nontransient" "$log"; then
+                printf '[container-check] %s: FAILED (exit %d) with a repository defect signature; failing without retry\n' "$label" "$status"
                 return "$status"
               fi
               if ! grep -Eqi "$transient" "$log"; then
@@ -152,9 +165,9 @@ jobs:
           run_container_check 'runtime-ledger-drill' bash infra/scripts/test-runtime-ledger.sh
           # 3. Credential scan of the full git history and of the working tree.
           run_container_check 'credential-scan-git-history' \
-            docker run --rm -v "$PWD:/repo" -w /repo "$gitleaks" \
+            docker run --rm -v "$PWD:/repo:ro" -w /repo "$gitleaks" \
               git /repo --redact --no-banner --config /repo/.gitleaks.toml
           run_container_check 'credential-scan-working-tree' \
-            docker run --rm -v "$PWD:/repo" -w /repo "$gitleaks" \
+            docker run --rm -v "$PWD:/repo:ro" -w /repo "$gitleaks" \
               dir /repo --redact --no-banner --config /repo/.gitleaks.toml
 # No deploy credentials or kill-switch deploy actions belong in this workflow.

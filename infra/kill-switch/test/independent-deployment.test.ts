@@ -321,13 +321,29 @@ describe('container steps retry within a finite budget', () => {
       expect(workflow).toContain('backoff=$(( base_sleep * attempt ))');
       expect(workflow).toContain('sleep "$backoff"');
 
-      // Both non-success exits propagate the failing command's own status rather than a zero.
+      // Every non-success exit propagates the failing command's own status rather than a zero.
+      // There are three such paths: the budget was exhausted, the log carries a repository-defect
+      // signature, and the log carries no transient signature at all.
       const propagations = workflow.match(/return "\$status"/g) ?? [];
-      expect(propagations, 'exhausted budget and non-transient failure must both propagate')
-        .toHaveLength(2);
+      expect(propagations, 'exhausted budget, repository defect and non-transient failure must all propagate')
+        .toHaveLength(3);
 
       // A genuine failure is not transient and must not be retried at all.
       expect(workflow).toMatch(/if ! grep -Eqi "\$transient" "\$log"; then/);
+
+      // A shell parse error is a defect in this repository, not a flaky network. Retrying it
+      // disguises a quoting bug as flakiness: run 38006425415 burned 45 seconds retrying a drill
+      // script that could never parse. It must fail on the first attempt, before the transient
+      // check is even consulted.
+      expect(workflow, 'a repository-defect signature must fail without retry')
+        .toMatch(/if grep -Eqi "\$nontransient" "\$log"; then/);
+      expect(workflow, 'the defect guard must be evaluated before the transient guard')
+        .toMatch(/if grep -Eqi "\$nontransient" "\$log"; then[\s\S]*?if ! grep -Eqi "\$transient"/);
+      // A bare "unexpected EOF" is ambiguous between a cut stream and a parse error, so it is
+      // classified as a defect. Treating it as transient is what caused the wasted retries.
+      const transientLine = workflow.match(/^\s*transient='([^']*)'/m)?.[1] ?? '';
+      expect(transientLine, 'a bare "unexpected EOF" must not be a network transient')
+        .not.toContain('unexpected EOF');
 
       // Nothing that would swallow a failure.
       expect(workflow).not.toMatch(/^\s*continue-on-error:/m);

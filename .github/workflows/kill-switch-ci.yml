@@ -56,7 +56,10 @@ jobs:
           # retried, so a genuine build failure fails immediately.
           attempts=3
           base_sleep=15
-          transient='429 Too Many Requests|toomanyrequests|502 Bad Gateway|503 Service Unavailable|504 Gateway Timeout|context deadline exceeded|TLS handshake timeout|i/o timeout|connection reset by peer|failed to resolve reference|failed to (pull|resolve) image|unexpected EOF'
+          transient='429 Too Many Requests|toomanyrequests|502 Bad Gateway|503 Service Unavailable|504 Gateway Timeout|context deadline exceeded|TLS handshake timeout|i/o timeout|connection reset by peer|failed to resolve reference|failed to (pull|resolve) image'
+          # Defects in this repository rather than conditions of the network. A shell parse error
+          # or a missing command can never be fixed by retrying, so they fail on the first attempt.
+          nontransient='syntax error|unexpected EOF while looking for matching|command not found'
 
           run_container_check() {
             local label="$1"; shift
@@ -76,6 +79,10 @@ jobs:
               fi
               if [[ "$attempt" -ge "$attempts" ]]; then
                 printf '[container-check] %s: FAILED after %d attempts (exit %d); not retrying further\n' "$label" "$attempt" "$status"
+                return "$status"
+              fi
+              if grep -Eqi "$nontransient" "$log"; then
+                printf '[container-check] %s: FAILED (exit %d) with a repository defect signature; failing without retry\n' "$label" "$status"
                 return "$status"
               fi
               if ! grep -Eqi "$transient" "$log"; then

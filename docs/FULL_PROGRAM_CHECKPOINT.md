@@ -1215,6 +1215,43 @@ AWS ECR Public serves the Docker **official library** images and is not subject 
 
 Both PostgreSQL drills, the credential scan, the real cross-process kill-switch tests and the image build **stay in place**. Any retry is bounded and can never convert a failure into a pass.
 
+### D-G — the runtime-ledger drill could not parse · FIXED
+
+Run `38006425415` failed with `test-runtime-ledger.sh: line 137: unexpected EOF while looking for matching `"'`. Localised with `bash -n` against the blob at each ref: `47f1032` parses, the pinned `HEAD` did not, and reverting the single `docker create` line made it parse again. The cause is the shape `container_id="$(docker create … \` across backslash-newlines, ending in a quoted `"$var")"`, which bash rejects; substituting `"${var}"` fails identically, so it is the **outer quoting of a multi-line `$(`**, not the expansion. The outer quotes are removed and the reason is recorded in the file so they are not restored. `bash -n` now exits 0 for both drill scripts.
+
+This is the **seventh** instance of the local-green pattern: the file passes every Windows check and fails only when bash actually parses it. No Windows check in this repository parses a shell script.
+
+### D-H — the retry classifier called a code defect "transient" · FIXED
+
+`unexpected EOF` sat in the transient signature list, so the D-G parse error was retried twice, burning 45 s before failing on a cause retrying could never fix. A `nontransient` guard now runs **before** the transient guard, and the bare pattern was removed from `transient`. Applied to both workflows.
+
+Verified by **executing** the function extracted from the workflow — text assertions only prove the source says the right thing, not that it does. Each scenario runs in its own process so the function's internal `set -e` cannot leak:
+
+| Scenario | Required | Observed |
+| --- | --- | --- |
+| genuine failure | exit 42, **one** attempt | exit 42, 1 attempt |
+| transient then success | pass on attempt 2 | pass, attempt 2 |
+| never-recovering transient | exit 7, exactly 3 attempts | exit 7, 3 attempts |
+| repository defect | exit 2, **one** attempt | exit 2, 1 attempt |
+| defect **and** transient string present | defect wins | 1 attempt |
+
+**10/10 assertions pass.** `independent-deployment.test.ts` now asserts all three propagation paths, the defect guard, its precedence over the transient guard, and that `unexpected EOF` is absent from the transient list.
+
+### Result at `87beb0e`
+
+`Isolated kill-switch checks and image` is **GREEN for the first time**: the image build, artifact export and the real cross-process single-writer drill all executed. `Main platform checks` has **every code-level step green**, and `migration-and-rls-drill` **passed on attempt 1**, proving the ECR mirror works end to end. Only `runtime-ledger-drill` failed, on D-G above.
+
+### Credential exposure — root cause found · `docs/credential-exposure-status-2026-10-10.md`
+
+An independent audit reached a conclusion the 2026-10-08 review did not. `turbo.json` declares no `env`, so Turbo runs in strict mode — which **looks** protective and is not. Probed against turbo 2.10.12: strict mode still passes through **every `GITHUB_*` variable**, all `NEXT_*`, `NODE_OPTIONS`, `CI`, `TURBO_*` and `VERCEL_*`, while filtering `MCP_TOKEN`, the model API keys and `SUPABASE_SERVICE_ROLE_KEY`. `GITHUB_MCP_TOKEN` is `GITHUB_*`-prefixed, so it reached `next build` and Turbopack's filesystem cache serialised it. **A credential not named `GITHUB_*` would never have been exposed this way.**
+
+- `pnpm dev` **is** protected — `scripts/dev.mjs` spawns services through the `environmentFor()` allowlist in `scripts/dev-env.mjs`, which contains no `GITHUB_MCP_TOKEN`. That is why the live dev cache scans clean.
+- `pnpm build`, `turbo run test` and a direct `next build` are **not**. Deleting the cache is therefore not a durable control. Declaring the variable in `turbo.json` `env` will **not** fix it — strict mode forces the passthrough, so the scrub must happen before Turbo spawns. `[ ]` 🚨 **N9**
+- The browser bundle contains **only** `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY`, both browser-public by design. `SUPABASE_SERVICE_ROLE_KEY` is absent from every file in every cache. One client chunk contains the **names** of secret-bearing settings (`SHOPIFY_CLIENT_SECRET`, `AGENT_JWT_KEYS`, `DATABASE_URL`) with **zero** assignments — labels, not values.
+- CI hardening verified independently: both workflows parse as valid YAML, the five variables are **true empty strings** rather than merely absent, no step-level override can bypass it, `GITHUB_TOKEN` is correctly left alone for checkout, and zero `--build-arg`/`--secret` exist anywhere in the repository.
+- 🆕 gitleaks ran with the repository mounted **read-write**. It only reads, so `-v "$PWD:/repo:ro"` is a free reduction in blast radius. Applied.
+- 🚨 **Owner action outstanding and not verifiable from this repository:** revoke the exposed fine-grained PAT and scope the replacement to repository read plus issues/PR only. No rotation evidence exists anywhere.
+
 ## 8.3 Verification — forced, uncached, this machine
 
 `scripts/verify-suite.ps1` forces typecheck and the turbo tests so a cache hit can never be presented as evidence.
@@ -1254,7 +1291,7 @@ The IPC defect was reproduced **deterministically** rather than won on a timing 
 | N3 | **The PS1 drill scripts had never passed on any machine.** They had been reported as passing on 2026-10-08, which could only have been the `.sh` scripts on Linux. The Windows path was silently unverified. | Fixed |
 | N4 | **In-process concurrency tests cannot model cross-process locks.** The repo now has genuine multi-OS-process drills for the ledger and the kill journal; other concurrency claims remain in-process only and should not be read as cross-process proof. | `[ ]` |
 | N5 | **PR #2 is redundant** (superseded by PR #3) and **PR #4 is docs-only and still open**. Both await an owner decision. | `[ ]` 🚨 owner |
-| N6 | **Docker Hub is unreachable from the GitHub runners.** Every container step fails while authenticating: `429 Too Many Requests`, then `504 Gateway Timeout`, then `context deadline exceeded` against `auth.docker.io`. This blocks the kill-switch image build, both Postgres drills and the gitleaks scan. **It is external infrastructure, not a defect**, and the same drills pass on this machine. The steps were deliberately **left in place** — removing them would drop the checks the workflows exist to perform. | `[ ]` 🚨 external — resolution prepared, §8.2.2 |
+| N6 | **Docker Hub is unreachable from the GitHub runners.** Every container step fails while authenticating: `429 Too Many Requests`, then `504 Gateway Timeout`, then `context deadline exceeded` against `auth.docker.io`. This blocks the kill-switch image build, both Postgres drills and the gitleaks scan. **It is external infrastructure, not a defect**, and the same drills pass on this machine. The steps were deliberately **left in place** — removing them would drop the checks the workflows exist to perform. | `[ ]` 🚨 external — resolution prepared, §8.2.1 "Registry resolution" |
 | N7 | **The kill-switch image has therefore never actually been built by CI.** `independent-deployment.test.ts` asserts the workflow *contains* a build step; that assertion passed while the build itself was failing. A workflow that asserts on its own configuration is not the same as the configuration working. | `[ ]` 🚨 |
 | N8 | **The gitleaks scan has not run** since these repairs landed, because it is a `docker run` step. The exposed PAT named in D1 must still be treated as disclosed regardless. | `[ ]` 🚨 |
 
