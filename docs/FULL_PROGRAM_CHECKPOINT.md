@@ -1422,7 +1422,35 @@ The resume machinery is sound; the **reporting** was the defect. `route.ts` wrap
 
 ---
 
-## 9. Session reconciliation — 2026-10-10 (authoritative as of this commit)
+### 9.6 🚨 D-1 — 14 of the 20 autonomy domains are inert · HIGHEST-VALUE OPEN DEFECT
+
+Found by CP-ARCH in [`docs/target-architecture.md`](target-architecture.md) and **independently re-verified** by the Team Lead, not accepted on report.
+
+The Constitution defines **20** autonomy domains ([`packages/schemas/src/constitution.ts:3`](../../packages/schemas/src/constitution.ts)):
+
+`sourcing, supplier_contact, catalog, pricing, promotions, advertising, content, influencers, seo, email, sms, support, refunds, orders, fulfillment, purchasing, inventory, finance, marketplaces, experimentation`
+
+Every one is persisted, rendered in Settings, and owner-editable. **Only six ever reach a decision.** `this.autonomy(...)` is invoked with exactly these domain sets (`engine.ts:636, 645, 652, 675, 684, 716`), plus two direct `.paused` reads at `:346` and `:411` that concern the same domains:
+
+| Enforced (6) | Inert — persisted, editable, never read by any decision (14) |
+| --- | --- |
+| `catalog`, `pricing`, `advertising`, `refunds`, `purchasing`, `fulfillment` | `sourcing`, `supplier_contact`, `promotions`, `content`, `influencers`, `seo`, `email`, `sms`, `support`, `orders`, `inventory`, `finance`, `marketplaces`, `experimentation` |
+
+**Consequence, stated plainly:** an owner can open Settings, set `domains.finance.mode = AUTONOMOUS` — or `domains.support`, `domains.content`, `domains.orders` — and **nothing changes anywhere**. The orchestrator contains **zero** references to `domains`. `checkout` and `commerce.event` call `block`/`scope`/`context` but never `autonomy`, so `domains.orders` and `domains.inventory` are inert even though those operations are the ones an owner most wants to constrain.
+
+This is the clearest instance in the program of a control surface that **looks** load-bearing and is not. It is squarely against the standing rule that every visible function must work, be honestly labelled, or be explicitly unavailable. `[ ]` 🚨
+
+**Two ways to close it, both legitimate, neither chosen yet:** wire the remaining domains into real gates, or stop presenting them as operating policies and label them as recorded-but-not-enforced. The second is honest and cheap; the first is the actual roadmap. The decision is a product decision, not a silent engineering one, so it is escalated rather than assumed.
+
+### 9.7 Other reconciliation findings
+
+- **The "19 settings" figure is stale in framing.** `node scripts/staging-readiness.mjs` reports **19** static failures, matching the archived `PREFLIGHT.json`. But the check now contains **25** `requireField` calls — so **19 is what is currently failing, not the total**. Correct anywhere it is stated as a fixed set.
+- **B-1 is live, not historical.** `infra/kill-switch/data/events.jsonl` is 0 bytes on disk and `journal.ts:50` refuses an empty existing journal, so `pnpm dev` cannot start on this machine. Still owner-authorised recovery; still not reset by any agent.
+- **The authority boundary is strong but narrow.** `engine.ts:533` returns `LIVE_ADAPTERS_UNAVAILABLE` through every `block()` path in live mode, so live financial adapters fail closed *by construction* rather than by configuration, with exactly one deliberate exception (the owner-only Shopify dev-store price path). 25 properties are documented as unbypassable with file:line.
+- 🚨 **Sharpest discipline dependency:** in simulation mode a single published static string (`hotl-local-development-token`, in `dev.mjs:29` and `.env.example`) confers **full owner authority** on every owner-only route. Acceptable for a labelled simulation; unacceptable in deployment, and it must never reach a hosted environment.
+- 🆕 Multi-workspace isolation and runtime RLS privileges are **self-reported by the guardrail**, not independently observed — the staging-readiness source says so itself. Marked `[ ]`.
+
+## 9.8 Session reconciliation — 2026-10-10 (authoritative as of this commit)
 
 ### 9.1 Named documents that do not exist
 
