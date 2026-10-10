@@ -10,7 +10,11 @@ import { test, expect } from '@playwright/test';
 // every route reported exactly its viewport width, producing a false pass. That false
 // pass is how the defect below survived two rounds of work.
 
-const ROUTES = ['/', '/agents', '/approvals', '/products', '/orders', '/finance', '/integrations', '/autonomy', '/guardrails', '/activity'];
+// `/settings` was missing from this sweep. It is the largest surface in the app (a
+// two-column settings layout with its own `.ds-settings` grid) and the only route with a
+// dedicated layout system, so it is the most likely place for a new overflow to appear
+// and the least likely to be noticed.
+const ROUTES = ['/', '/agents', '/approvals', '/products', '/orders', '/finance', '/integrations', '/autonomy', '/guardrails', '/activity', '/settings'];
 
 // KNOWN DEFECT, measured 2026-09-09 with `networkidle`:
 //   360px /products  document.scrollWidth = 671   viewport = 360

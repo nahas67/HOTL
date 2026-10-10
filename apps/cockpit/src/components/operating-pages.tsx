@@ -237,6 +237,23 @@ export function pilotDraftGaps(draft: PilotDraft): string[] {
   return gaps;
 }
 
+/**
+ * The Constitution tablist, in order.
+ *
+ * Hoisted out of the component so the keyboard handler and the rendered tabs cannot drift
+ * apart. `role="tablist"` obliges arrow-key navigation and a roving tabindex (ARIA APG); with
+ * the tabs rendered inline and no key handler, a keyboard user had to press Tab six times to
+ * cross a control that looks like one stop.
+ */
+const CONSTITUTION_TABS = [
+  ["strategy", "Business & goals"],
+  ["pilot", "Pilot business & risk"],
+  ["autonomy", "Autonomy modes"],
+  ["limits", "Financial limits"],
+  ["boundaries", "Markets & rules"],
+  ["history", "Version history"],
+] as const;
+
 export function ConstitutionPage({
   api,
   onSaved,
@@ -299,7 +316,12 @@ export function ConstitutionPage({
     setError("");
     setMessage("");
     try {
-      const { version, updatedAt: _updatedAt, pilot: _pilot, ...fields } = draft;
+      // `domainEnforcement` is stamped onto every constitution the guardrail returns and is stripped
+      // here alongside `version`, `updatedAt` and `pilot`, because it is derived engine state
+      // rather than owner input. `constitutionPatchSchema` deliberately has no field for it --
+      // an owner-supplied value must be rejected outright rather than silently ignored -- so
+      // echoing the whole object back made every constitution save fail client-side validation.
+      const { version, updatedAt: _updatedAt, pilot: _pilot, domainEnforcement: _domainEnforcement, ...fields } = draft;
       const body = constitutionPatchSchema.parse({
         ...fields,
         goals: lines(fields.goals.join("\n")),
@@ -529,21 +551,36 @@ export function ConstitutionPage({
         className="os-tabs"
         role="tablist"
         aria-label="Constitution settings"
+        onKeyDown={(event: React.KeyboardEvent<HTMLDivElement>) => {
+          const index = CONSTITUTION_TABS.findIndex(([id]) => id === tab);
+          const last = CONSTITUTION_TABS.length - 1;
+          let next: number;
+          if (event.key === "ArrowRight") next = index === last ? 0 : index + 1;
+          else if (event.key === "ArrowLeft") next = index === 0 ? last : index - 1;
+          else if (event.key === "Home") next = 0;
+          else if (event.key === "End") next = last;
+          else return;
+          // Without preventDefault the arrow keys also scroll the page, which moves the
+          // viewport out from under the panel the selection just changed.
+          event.preventDefault();
+          const [nextId] = CONSTITUTION_TABS[next];
+          setTab(nextId);
+          // Focus must follow selection or the roving tabindex would leave the keyboard user
+          // on the tab they just left, still in a tablist they can no longer navigate.
+          document.getElementById(`constitution-tab-${nextId}`)?.focus();
+        }}
       >
-        {[
-          ["strategy", "Business & goals"],
-          ["pilot", "Pilot business & risk"],
-          ["autonomy", "Autonomy modes"],
-          ["limits", "Financial limits"],
-          ["boundaries", "Markets & rules"],
-          ["history", "Version history"],
-        ].map(([id, label]) => (
+        {CONSTITUTION_TABS.map(([id, label]) => (
           <button
             key={id}
             id={`constitution-tab-${id}`}
             type="button"
             role="tab"
             aria-selected={tab === id}
+            // Roving tabindex: exactly one tab is in the page tab order, so Tab enters the
+            // tablist once and the arrow keys move within it. With every tab focusable, the
+            // control cost six Tab presses to cross.
+            tabIndex={tab === id ? 0 : -1}
             // Only the rendered panel exists, so only the selected tab may point at one.
             // Declaring aria-controls on all six left five of them referencing elements
             // that were never in the DOM, which is invalid for assistive technology.
@@ -711,7 +748,9 @@ export function ConstitutionPage({
                 ? "Per-domain modes below are active. Domain amount limits remain subject to the overall financial ceilings."
                 : "The selected global mode governs every domain. Per-domain modes are used when Custom is selected; pause and amount limits remain available."}{" "}
               Unimplemented business domains do not acquire execution
-              capabilities by changing a mode.
+              capabilities by changing a mode. Rows marked{" "}
+              <strong>Recorded, not enforced</strong> name the reason: no
+              operation consults them, so their mode changes nothing today.
             </Notice>
             <div className="os-domain-list">
               {autonomyDomains.map((domain) => (
@@ -779,6 +818,18 @@ export function ConstitutionPage({
                     />
                     Paused
                   </label>
+                  {/* The one place an owner sets a domain mode must also say whether that
+                      mode governs anything. Eleven of the twenty domains have no operation
+                      behind them, and a select that looks identical on every row is the
+                      clearest form of a control that looks load-bearing and is not. The
+                      basis string says which, and why, rather than leaving it to inference. */}
+                  {!draft.domainEnforcement?.[domain]?.enforced && (
+                    <p className="os-domain-note">
+                      <span className="badge">Recorded, not enforced</span>{" "}
+                      {draft.domainEnforcement?.[domain]?.basis ??
+                        "No operation consults this domain yet."}
+                    </p>
+                  )}
                 </div>
               ))}
             </div>

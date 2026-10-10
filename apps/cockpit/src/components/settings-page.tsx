@@ -355,6 +355,16 @@ function BusinessPanel({
         const autonomous = domains.filter(
           ([, value]) => value.mode === "AUTONOMOUS",
         ).length;
+        // Mode and enforcement are different claims, and conflating them is how a control comes
+        // to look load-bearing when it is not. Every domain has an editable mode; only the ones
+        // with a real gate behind them have anything to enforce. `domainEnforcement` is derived
+        // from engine code and is not owner-editable, so this cannot drift from the gates.
+        const enforcement: Partial<
+          Record<string, { enforced: boolean }>
+        > = policy.domainEnforcement ?? {};
+        const enforced = domains.filter(
+          ([name]) => enforcement[name]?.enforced,
+        ).length;
         return (
           <Stack>
             <Card
@@ -431,12 +441,17 @@ function BusinessPanel({
                   { label: "Operating mode", value: titleCase(policy.mode) },
                   { label: "Policy version", value: policy.version },
                   {
-                    label: "Governed domains",
-                    value: `${domains.length} domains`,
+                    label: "Enforced domains",
+                    value: `${enforced} of ${domains.length}`,
                   },
                   {
                     label: "Autonomous domains",
-                    value: `${autonomous} of ${domains.length}`,
+                    // Counted over the domains that actually have a gate. "3 autonomous"
+                    // out of eleven unenforced modes would be a claim about nothing.
+                    value: `${domains.filter(
+                      ([name, value]) =>
+                        enforcement[name]?.enforced && value.mode === "AUTONOMOUS",
+                    ).length} of ${enforced}`,
                   },
                   {
                     label: "Permitted countries",
@@ -1049,6 +1064,15 @@ function AutomationPanel({
         for (const [, value] of domains)
           byMode.set(value.mode, (byMode.get(value.mode) ?? 0) + 1);
         const pausedDomains = domains.filter(([, value]) => value.paused);
+        // Same distinction as the Policy card above: an editable mode is not an enforced
+        // gate. Counting modes here would repeat, in a second place, the claim that every
+        // one of the twenty domains governs something.
+        const enforcement: Partial<
+          Record<string, { enforced: boolean }>
+        > = data.constitution.domainEnforcement ?? {};
+        const enforced = domains.filter(
+          ([name]) => enforcement[name]?.enforced,
+        ).length;
         const proposals = data.proposals ?? [];
         const waiting = proposals.filter((item) => item.status === "pending");
         const superseded = proposals.filter((item) => item.status === "expired");
@@ -1175,9 +1199,12 @@ function AutomationPanel({
                   ))}
               </Grid>
               <p className="ds-help">
-                {domains.length} domains are governed. Each one is edited
-                individually in Autonomy &amp; policy, where the full constitution
-                and its version history are available.
+                {enforced} of {domains.length} domains have a real operation
+                behind them and are enforced at the guardrail. The other{" "}
+                {domains.length - enforced} are saved and editable, but no
+                operation consults them yet — they are recorded, not enforced.
+                Each one is edited individually in Autonomy &amp; policy, where
+                the full constitution and its version history are available.
               </p>
             </Card>
 

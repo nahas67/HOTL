@@ -415,12 +415,21 @@ export function Cockpit({ initialSection }: { initialSection: string }) {
       // Network/server failures retain their key. A completed response can be
       // retried intentionally as a new owner action after correcting inputs.
       if (response.status < 500) pendingRequests.current.delete(fingerprint);
-      if (!response.ok)
-        throw new Error(
+      if (!response.ok) {
+        // The guardrail's machine-readable reason is attached to the Error, not just its
+        // message. Components need to distinguish a stale-record conflict (reopen and retry)
+        // from a stale-policy conflict (the Constitution moved under you) -- and matching on
+        // the English sentence cannot do that, because the proxy emits that same phrasing for
+        // both. Wording changes would silently turn one case into the other.
+        const message =
           result.error?.message ??
-            result.message ??
-            "The request could not be completed.",
-        );
+          result.message ??
+          "The request could not be completed.";
+        throw Object.assign(new Error(message), {
+          code: typeof result.error?.code === "string" ? result.error.code : undefined,
+          status: response.status,
+        });
+      }
       return result;
     },
     [token],
@@ -1103,12 +1112,23 @@ export function Cockpit({ initialSection }: { initialSection: string }) {
             onCancel={() => setRefundEditor(null)}
             onSaved={async (result) => {
               setRefundEditor(null);
+              // The guardrail emits `escalated` (engine.ts:589,596,658) and never
+              // `escalate`/`interrupt`, so the previous comparison never matched and
+              // every escrow escalation told the owner the refund had been "recorded"
+              // with an outcome to review, when nothing had been paid and a decision
+              // was still outstanding. Say what actually happened.
+              const decision = String(result.decision ?? "");
+              // `warning` is not only a colour. It selects the icon (cockpit.tsx:1014), the
+              // dismiss timer (`:535`, 12s vs 5s) and the styling (`:1011`). Without it, the one
+              // message stating that NO MONEY MOVED is rendered beside a green success
+              // checkmark in neutral styling and disappears in the shortest window in the
+              // component -- the copy and the glyph asserting opposite things about a refund.
+              const escalated = decision === "escalated" || decision === "escalate" || decision === "interrupt";
               setToast({
-                text:
-                  result.decision === "escalate" ||
-                  result.decision === "interrupt"
-                    ? "Refund request is waiting in Approvals for a separate owner decision."
-                    : "Refund evaluation recorded. Review the order and audit trail for its outcome.",
+                warning: escalated,
+                text: escalated
+                  ? "Refund not paid. It was held in escrow and is now waiting in Approvals for a separate owner decision."
+                  : "Refund evaluation recorded. Review the order and audit trail for its outcome.",
               });
               await refresh();
             }}

@@ -273,6 +273,15 @@
 .os-domain-row > strong {
   font-size: 12px;
 }
+/* Spans the whole row so the "recorded, not enforced" basis reads as a note about the
+   domain rather than as a fifth column competing with the mode, limit and pause controls. */
+.os-domain-note {
+  grid-column: 1 / -1;
+  margin: -6px 0 0;
+  font-size: 10px;
+  line-height: 1.7;
+  color: var(--muted);
+}
 .os-domain-row select {
   margin: 0;
 }
