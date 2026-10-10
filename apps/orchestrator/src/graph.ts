@@ -2,6 +2,7 @@ import { Annotation, END, START, StateGraph, interrupt } from '@langchain/langgr
 import { createHash } from 'node:crypto';
 import type { CommerceOrder, Product } from '@hotl/schemas';
 import { draftWithLiteLLM, type AgentContext, type AgentId, type GuardrailGateway, type Result } from './client.js';
+import { decisionDomain, pausedDomainForStage, stageDomains } from './domains.js';
 
 type Stage = 'catalog' | 'campaign' | 'supplier' | 'refund';
 type Log = { node: string; summary: string; decision?: string };
@@ -79,8 +80,26 @@ export function createCommerceGraph(gateway: GuardrailGateway, checkpointer: Che
     // would advertise an approval the owner already decided, and would let an
     // escalation carrying no id resume against the wrong proposal.
     const interruptId = decision.decision === 'escalated' ? decision.interruptId ?? null : null;
-    return { lastDecision: decision, guardrailDecisions: [decision], interruptId,
+    // Name the owner autonomy domain a refusal came from. Without this a run log records "denied"
+    // and leaves the owner to guess which of twenty domain policies stopped the cycle.
+    const domain = decisionDomain(decision);
+    const logs: Log[] = domain
+      ? [{ node: `guardrail.${domain}`, summary: `${plan.objective} — ${decision.decision === 'escalated' ? 'awaiting an owner decision' : `refused (${String(decision.reason ?? 'GUARDRAIL_DENIED')})`} under the ${domain} autonomy domain` }]
+      : [];
+    return { lastDecision: decision, guardrailDecisions: [decision], interruptId, logs,
       ...(plan.stage === 'supplier' && decision.decision !== 'escalated' && !staleReasons.has(decision.reason ?? '') ? { supplierFinished: [lineId(plan.body.orderId, plan.body.productId)] } : {}) };
+  }
+  /**
+   * Skip a stage whose governing autonomy domain the owner has paused.
+   *
+   * The guardrail would deny this action anyway with `DOMAIN_PAUSED`; skipping first means the run
+   * never spends an owner decision or a proposal slot on work that is certain to be refused. Only
+   * PAUSE is honoured here -- MANUAL and COPILOT still go to the guardrail so the authoritative
+   * decision is recorded in the run's decision log.
+   */
+  function paused(stage: Stage, context: AgentContext): Update | null {
+    const domain = pausedDomainForStage(context, stage);
+    return domain ? skip(stage, `DOMAIN_PAUSED:${domain}`, context) : null;
   }
   function afterAction(state: State) {
     if (state.status === 'halted') return 'halted';
@@ -101,6 +120,7 @@ export function createCommerceGraph(gateway: GuardrailGateway, checkpointer: Che
     }))
     .addNode('sourcing_trend_scan', node('sourcing.trend_scan', 'sourcing_agent', 'Reviewing local catalog candidates; no external trend feed is connected', async state => {
       const context = await gateway.context('sourcing_agent');
+      const held = paused('catalog', context);if(held)return held;
       const prior = state.replanning && state.plan?.stage === 'catalog' ? state.plan : null;
       const product = prior ? context.products.find(p => p.id === prior.body.productId) : context.products.find(p => p.status !== 'active');
       // An owner edit invalidates the old publish intent. Do not merely refresh
@@ -119,6 +139,7 @@ export function createCommerceGraph(gateway: GuardrailGateway, checkpointer: Che
     .addNode('sourcing_publish_or_reject', node('sourcing.publish_or_reject', 'sourcing_agent', 'Submitting the saved listing intent to guardrails when its margin passes', state => state.lastDecision.decision === 'allow' ? execute(state) : {}))
     .addNode('marketing_copy_and_creative', node('marketing.copy_and_creative', 'marketing_agent', 'Preparing a campaign proposal against current advertising policy', async state => {
       const context = await gateway.context('marketing_agent');
+      const held = paused('campaign', context);if(held)return held;
       const campaignId = `campaign-${state.runId}`;
       if (context.campaigns.some(c => c.campaignId === campaignId)) return skip('campaign', 'EXISTING_CAMPAIGN_OBSERVED', context);
       const copy = await draftWithLiteLLM('marketing_agent', 'Write a short, truthful everyday-essentials campaign. Do not invent reviews, scarcity, or health benefits.');
@@ -128,6 +149,7 @@ export function createCommerceGraph(gateway: GuardrailGateway, checkpointer: Che
     .addNode('marketing_launch_or_hold', node('marketing.launch_or_hold', 'marketing_agent', 'Recording the campaign decision without separate provider execution', () => ({})))
     .addNode('order_stock_sync', node('order.stock_sync', 'order_agent', 'Reconciling open order lines with current supplier purchase receipts', async state => {
       const context = await gateway.context('order_agent');
+      const held = paused('supplier', context);if(held)return held;
       const selected = state.supplierOrders[0];
       const order = selected ? context.orders.find(o => o.id === selected.id) : context.orders.find(o => o.status === 'processing');
       const item = order?.status === 'processing' ? order.items.find(i => !(state.supplierFinished ?? []).includes(lineId(order.id, i.productId)) && !context.supplierOrders.some(p => p.orderId === order.id && p.productId === i.productId)) : undefined;
@@ -139,6 +161,7 @@ export function createCommerceGraph(gateway: GuardrailGateway, checkpointer: Che
     .addNode('support_triage', node('support.triage', 'support_agent', 'Checking the explicit simulation support case against current order state', async state => {
       const context = await gateway.context('support_agent');
       if (context.mode !== 'simulation') return { ...skip('refund', 'NO_CONNECTED_SUPPORT_REQUEST', context), supportTickets: [] };
+      const held = paused('refund', context);if(held)return { ...held, supportTickets: [] };
       const prior = state.replanning && state.plan?.stage === 'refund' ? state.plan : null;
       const amount = options.refundAmount ?? 42;
       // Candidate selection only. Whether a refund is permitted -- the balance arithmetic and
