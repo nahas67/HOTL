@@ -22,20 +22,25 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 // Resolve the executable of a direct dependency by reading its manifest `bin` field.
 // `require.resolve` is not usable here: `eslint` and `@playwright/test` both declare an `exports`
 // map that does not expose their bin files as subpaths.
-function binOf(packageName, binName) {
-  const manifest = resolve(root, 'node_modules', packageName, 'package.json');
+export function resolvePackageBin(packageDir, packageName, binName) {
+  const manifest = resolve(packageDir, 'node_modules', packageName, 'package.json');
   if (!existsSync(manifest)) {
     throw new Error(
-      `Cannot find ${packageName}. Run "pnpm install" before the build and test scripts.`,
+      `Cannot find "${packageName}" under ${packageDir}. Run "pnpm install" at the workspace root ` +
+      `(or "npm ci" in an isolated project) before building.`,
     );
   }
   const { bin } = JSON.parse(readFileSync(manifest, 'utf8'));
   const relative = typeof bin === 'string' ? bin : bin?.[binName];
   if (!relative) throw new Error(`${packageName} does not expose a "${binName}" executable.`);
-  const executable = resolve(root, 'node_modules', packageName, relative);
-  if (!existsSync(executable)) throw new Error(`Missing executable for ${packageName}.`);
+  const executable = resolve(packageDir, 'node_modules', packageName, relative);
+  if (!existsSync(executable)) {
+    throw new Error(`Missing executable for ${packageName} at ${executable}.`);
+  }
   return executable;
 }
+
+const binOf = (packageName, binName) => resolvePackageBin(root, packageName, binName);
 
 // Each preset is an ordered list of steps. A step is either a Node script to run, or -- when
 // `script` is null -- arguments for node itself. Extra arguments from the command line are
@@ -53,13 +58,25 @@ export const presets = {
   ],
 };
 
-export function spawnStep(script, args, env, stdio = 'inherit') {
+// Spawn one step. `cwd` defaults to the repository root; the per-package wrappers pass their own
+// package directory so a script never depends on the shell's working directory or on PATH order.
+export function spawnStep(script, args, env, stdio = 'inherit', cwd = root) {
   return spawn(process.execPath, script ? [script, ...args] : args, {
-    cwd: root,
+    cwd,
     env,
     stdio,
     windowsHide: true,
   });
+}
+
+// The one way a build or test process is started in this repository: run the given executable in
+// `packageDir` with a scrubbed environment. Scripts outside the pnpm workspace use this too, so the
+// scrub cannot be bypassed by choosing a different entry point.
+//
+// `env` defaults to the scrubbed parent environment. A caller that must re-admit a bounded set of
+// its own inputs passes an environment it built itself; the default remains the safe path.
+export async function runScrubbed(packageDir, script, args, env = buildEnvironmentFor(process.env)) {
+  return exitCode(spawnStep(script, args, env, 'inherit', packageDir));
 }
 
 export function exitCode(child) {

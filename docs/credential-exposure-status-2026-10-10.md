@@ -384,3 +384,201 @@ creates the artifact class under review.
    editor, not this reviewer.
 4. Repository: consider a post-build assertion that no credential-shaped value appears in
    `.next/cache/turbopack`, so recurrence is caught automatically rather than by review.
+
+---
+
+# Addendum — 2026-10-10, later session: N9a, N9b, N9c
+
+Written by the infrastructure/security agent. This section supersedes nothing above; it records
+what closed items 2 and 4 of §9, and states the measurements that back it.
+
+## 10. What changed
+
+| Item | Change | Files |
+| --- | --- | --- |
+| N9a | The Next production build is launched by a readable script instead of an inline one-liner | `scripts/next-build.mjs` (new), `apps/cockpit/package.json`, `apps/storefront/package.json` |
+| N9a (support) | Package-scoped bin resolution and a scrubbed spawn helper | `scripts/build-env.mjs` |
+| N9b | The isolated medusa project's commands run through the same scrub | `scripts/medusa-run.mjs` (new), `apps/commerce-core/medusa/package.json` |
+| §9.4 | A counts-only post-build credential scan exists | `scripts/scan-build-cache.mjs` (new) |
+| N9c | `apps/*/out/` and `.vercel/` added to `.gitignore` | `.gitignore` |
+
+The shared allowlist in `scripts/dev-env.mjs` was **not** modified. It was deliberately left exactly
+as §8.10 proved it.
+
+### 10.1 Why the package scripts had to change and not only the root launcher
+
+§5.2 identified three unguarded entry points. The root launcher closed `pnpm build`; it does not
+close the other two, because `pnpm --filter @hotl/cockpit build` and a bare `next build` inside
+`apps/cockpit` never execute `scripts/build-env.mjs`. The scrub therefore now sits in the process
+that actually spawns Next, so every route into the bundler converges on one allowlist.
+
+## 11. Measurements
+
+Method: the same synthetic canary used in §8.10 — `GITHUB_MCP_TOKEN`, `SHOPIFY_CLIENT_SECRET` and
+`LITELLM_MASTER_KEY` set to `CANARY_*` values, counting their exact occurrences on disk afterwards.
+No real credential was read, printed or written. The "BEFORE" rows are real builds, not estimates:
+they are the same builds with the scrub removed.
+
+An earlier draft of this addendum ran these in an isolated copy of the tree, because a live
+`scripts/dev.mjs` stack was serving :3000/:3001/:4100 and other agents were running browser tests
+against it. That stack is now down, so the table below is the **real working tree**, purged to cold
+and rebuilt with the canary in the environment. The isolated-copy figures are kept in §11.3 as the
+source of the BEFORE rows.
+
+| Run | Build path | Files scanned | Size | `GITHUB_MCP_TOKEN` | `SHOPIFY_CLIENT_SECRET` | `LITELLM_MASTER_KEY` | **Total** |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| A — before | raw `next build`, cockpit, **scrub removed** | 1,391 | 97.2 MB | **2** (1 file) | 0 | 0 | **2** |
+| B — after | `pnpm --filter @hotl/cockpit build` | 1,656 | 318.7 MB | 0 | 0 | 0 | **0** |
+| C0 — before | raw `next build`, storefront, **scrub removed** | 160 | 35.0 MB | **2** (1 file) | 0 | 0 | **2** |
+| C1 — after | `pnpm --filter @hotl/storefront build` | (in B) | (in B) | 0 | 0 | 0 | **0** |
+| D — after | `pnpm build --force` (root launcher → `turbo run build`) | 1,704 | 407.7 MB | 0 | 0 | 0 | **0** |
+| E — after | medusa `npm test` (CI's command) | no cache output | — | 0 | 0 | 0 | **0** |
+| E — after | medusa `npm run build` | 14 | 0.70 MB | 0 | 0 | 0 | **0** |
+
+Rows B and D are single runs of both Next apps, so their file and byte counts cover
+`apps/cockpit/.next` + `apps/storefront/.next` (+ `.turbo` for D) together. Both exited 0 and both
+reported `✓ Compiled successfully`.
+
+The leak reproduced in run A landed in exactly the file class named in the 2026-10-08 finding:
+`apps/cockpit/.next/cache/turbopack/v16.3.4-299180d3/00000010.sst` (and `00000003.sst` for the
+storefront). Two occurrences each, matching the 4 that §8.10 recorded.
+
+Two observations worth stating rather than glossing:
+
+- **Only the `GITHUB_` value leaked.** `SHOPIFY_CLIENT_SECRET` and `LITELLM_MASTER_KEY` were set
+  for the same run and produced **0** occurrences. Their *names* appear in the cache
+  (NAME-ONLY below) but not their values. That is consistent with §5.1: Turbopack snapshots the
+  CI-framework-named namespace. The measurement is honest about that — the other two canaries are
+  control values that did not move, not evidence that those secrets would have been safe.
+- **Runs A and B differ in file count.** That is Next's own cache-file numbering and the different
+  number of apps in each run, not a difference in what was scrubbed.
+
+### 11.3 The BEFORE rows, and how they were obtained
+
+They are genuine builds, not extrapolations: the same cold build with the scrub removed, in an
+isolated copy of the tree (`%TEMP%\hotl-canary`, `pnpm install --offline --frozen-lockfile`, 319
+packages reused, 0 downloaded), produced a real `.sst` containing 2 occurrences of the
+`GITHUB_MCP_TOKEN` canary. An isolated copy was needed because that copy had to be broken
+deliberately, and breaking the live tree was not acceptable while other agents were using it.
+
+### 11.1 Scan of the build output, at the moment it was written
+
+`node scripts/scan-build-cache.mjs` over the output of the canary run D:
+
+| Path | Files | Size | Credential values |
+| --- | ---: | ---: | --- |
+| `apps/cockpit/.next` | 1,496 | 283.0 MB | **0** |
+| `apps/storefront/.next` | 160 | 35.8 MB | **0** |
+| `apps/commerce-core/medusa/.medusa` | 14 | 0.7 MB | **0** |
+| `.turbo` (incl. zstd archives, inflated and walked as tar) | 45 | 88.9 MB | **0** |
+| **Total** | **1,715** | **408.4 MB** | **0** — scan exit 0 |
+
+A separate baseline scan of the *pre-existing* caches (before any of this work, no canary set)
+covered 2,350 files / 967.1 MB and also returned 0 credential values, 305 NAME-ONLY occurrences and
+4 vendored files.
+
+NAME-ONLY and VENDOR are reported but excluded from the verdict, for the reasons in §4.2: the four
+vendored files are `libvips-cpp…dylib` binaries under `sharp-libvips` (in `.next/standalone` and
+inside a turbo archive) carrying OpenSSL `-----BEGIN … PRIVATE KEY-----` constants.
+
+### 11.2 The scanner had to be built, and it caught its own false positives
+
+A first version matched bare variable *names* and reported 15 "leaks" in a tree that had none —
+`SHOPIFY_CLIENT_SECRET` is a Settings-page field label, and `GITHUB_` occurs in Next's vendored
+`ci-info` and `detect-agent` CI-provider tables. A name in a build cache is evidence of nothing.
+
+The shipped scanner therefore matches credential **value shapes** and name-plus-assignment, and
+classifies everything else as NAME-ONLY. It is validated by a positive control (planted canary in a
+`.sst`, in a `.tar.zst` member, and a bare PEM header — all detected with exact counts, exit 1) and
+a negative control (`scripts/`, 54 name occurrences, 0 values, exit 0). An incomplete scan exits
+**2**, not 0.
+
+**The scanner is not wired into `pnpm build` or CI.** `package.json` and `.github/workflows/` were
+outside this agent's write scope, so recurrence is still caught by running it, not automatically.
+
+## 12. N9b — medusa, and the exception it required
+
+CI enters medusa with `working-directory: apps/commerce-core/medusa` and `npm ci && npm test`
+(`.github/workflows/ci.yml:48-50`). It is outside the pnpm workspace, so `scripts/build-env.mjs`
+never saw it, and neither npm nor `@medusajs/cli` filters an environment.
+
+Routing `test`/`typecheck` through the scrub was clean. Routing `build`/`dev`/`start`/`db:migrate`
+through it **broke medusa**, and the reason is worth recording: `medusa-config.ts:14-31` calls
+`required()` on six names at module load, so `medusa build` refuses to start without them rather
+than building a degraded project. The scrub dropped all of them and the build failed with
+`MEDUSA_DATABASE_URL must be configured`.
+
+The fix is a bounded, package-local re-admission of exactly those six names **after** the scrub,
+for those four commands only:
+
+- `scripts/dev-env.mjs` is unchanged, so no other build in the repository can inherit any of them.
+- `test` and `typecheck` are excluded — the guarded-payment suite imports modules directly and
+  never loads `medusa-config.ts`, so `npm test`, the only medusa command CI runs, receives the
+  scrubbed environment and nothing more.
+- `scripts/dev.mjs` starts medusa through its own `environmentFor('medusa', …)` allowlist and is
+  unaffected.
+
+**Residual risk, stated plainly:** `medusa build` therefore holds this service's own database DSN
+and two signing secrets. That follows from the config's fail-closed design, not from this wrapper.
+What the wrapper removes is every credential belonging to something *else* — agent tooling, the
+LiteLLM proxy master key, and the provider write keys AGENTS.md rule 5 confines to the guardrail
+service. Measured consequence: `medusa build` wrote **0** occurrences of all eight canary values
+(including its own five) into the 14 files of `.medusa/`, including the compiled
+`.medusa/server/medusa-config.js`.
+
+## 13. N9c — tracking, and what was deliberately not done
+
+`git check-ignore` confirms `apps/cockpit/.next/cache/turbopack` and
+`apps/storefront/.next/cache/turbopack` are ignored by `.gitignore:2` (`.next/`), `.turbo` by
+`.gitignore`, and `apps/commerce-core/medusa/.medusa` by `apps/commerce-core/medusa/.gitignore:2`.
+`git ls-files` matches `.next/`, `turbopack` or `.turbo/` in **0** tracked files. `out/` and
+`.vercel/` — the two Next output locations §2 called latent — are now ignored as well.
+
+**Done: purging `apps/*/.next`, `.turbo` and `apps/commerce-core/medusa/.medusa` in the live tree.**
+1,703 files / 319.5 MB removed, after confirming no HOTL process and no application port was live.
+`git status` is byte-identical before and after, which is the expected result for ignored paths and
+is itself the check that these were never tracked. Earlier in this work the purge was deliberately
+deferred: a `scripts/dev.mjs` stack was running and other agents were running browser tests against
+it. Both caches already scanned clean (§11.1), so this was hygiene, not risk removal — §F6 stands:
+cache deletion was never the fix, and it still is not.
+
+**Not done, by instruction:** no git history was rewritten and nothing was rotated.
+
+## 14. Open items after this addendum
+
+1. **Owner action, unchanged and still the only thing that closes the original finding:** revoke or
+   re-scope the disclosed PAT (§7). Nothing done here changes that.
+2. **Wire `scripts/scan-build-cache.mjs` into `pnpm build` and CI.** The tool exists and is
+   validated; it is not yet a gate. Needs `package.json` / `.github/workflows/` write access.
+3. **F2 is still open and still not mine:** add `:ro` to both gitleaks volume mounts in
+   `.github/workflows/ci.yml`.
+4. **A Windows teardown flake is still latent across the test suites.** `fs.promises.rm` defaults to
+   `maxRetries: 0`, so a single transient `ENOTEMPTY`/`EPERM` on a temp directory fails the test.
+   30 of the 32 fixture teardown sites in `apps/*/test/*.test.ts` still use the default; only
+   `lock-reclaim-race.test.ts` and `money-domain.test.ts` pass `maxRetries`. Observed by the E2E
+   agent as `money-domain.test.ts:12` failing in `afterEach` under the full 30-file parallel pool
+   and passing in isolation; it did not reproduce on my own full `pnpm test`. The fix is one option
+   per call site and is outside this agent's write scope.
+
+## 15. Verification commands and their real results
+
+Run at the end, in the real working tree, with nothing else running:
+
+| Command | Result |
+| --- | --- |
+| `pnpm lint` | **exit 0** |
+| `pnpm typecheck` | exit 0, but 11/11 **cache hits** — not evidence of a fresh typecheck |
+| `pnpm typecheck --force` | **exit 0**, 11/11 re-run, no cached result used |
+| `pnpm build --force` | **exit 0**, 8/8 tasks, both Next apps `✓ Compiled successfully` |
+| `pnpm test` | **exit 0** — 29/29 root tests, 11/11 turbo tasks |
+| `node scripts/scan-build-cache.mjs` | **exit 0**, no credential value in any build output |
+| `node --test tests/*.test.mjs` | **exit 0**, 29/29 (includes `build-env-isolation`, `repository-hygiene`) |
+
+An earlier `pnpm build --force` in this session failed on `@hotl/guardrail-service#build` because an
+untracked, mid-edit `test/lock-reclaim-race.test.ts` had live type errors. Its owner fixed it; the
+final runs above are green. That failure is recorded here rather than deleted, because the reason a
+green run is trustworthy is that the earlier red one is on the record.
+
+The turbo `FULL TURBO` line on a first `pnpm typecheck` is worth flagging for the next reviewer:
+with an untracked file added to a package, turbo's hash did not change and it replayed a cached
+success. A cached typecheck is not a typecheck.
