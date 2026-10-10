@@ -1524,3 +1524,10 @@ The merge is blocked **only** on an approving review, which only the owner can g
 3. **CP-03B** — B-2 plus the unverified control surface, prioritising financial actions, forms, authorization and mobile layouts.
 4. **CP-ARCH** — produce the reconciled target-architecture document (N10) from real source.
 5. **CP-05+** — Gates A/B/C remain owner- and externally-blocked; independent engineering continues around them.
+
+---
+
+> **§10 supersedes §9.4's open ledger and §9.5's working plan from `027c806` onward.**
+> The live execution state, the recovered stale-lock race and its fix, and the current open
+> ledger are in **[`SESSION_CHECKPOINT_2026-10-10.md`](SESSION_CHECKPOINT_2026-10-10.md)**.
+> Read that before acting on §9. Nothing here moves a gate.
