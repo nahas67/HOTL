@@ -1329,6 +1329,29 @@ The IPC defect was reproduced **deterministically** rather than won on a timing 
 
 **Every code-level check on the branch is green. The remaining red is entirely an external registry outage, and it is recorded as a blocker rather than removed from the pipeline.**
 
+## 8.8b CP-03B — cockpit route, control and vertical Settings inventory
+
+Delivered in [`docs/cockpit-route-and-settings-inventory.md`](cockpit-route-and-settings-inventory.md). Every route was visited in a real browser; nothing was classified from source alone and presented as observed.
+
+**Coverage.** 11/11 routes, 9/9 Settings panels. Of ~120 inventoried controls, **~45 were actually clicked and observed** and ~75 are explicitly labelled `SOURCE`/`UNVERIFIED`. Routes: WORKING 8, READ-ONLY 1, SIMULATED 1, PARTIAL 1. Settings: 3 panels WRITE-capable, 6 READ-ONLY. Settings has only **5 write controls out of 38** — a deliberate design choice recorded in `settings-page.tsx`, not an inventory gap, and not to be misread as missing functionality.
+
+**On the prior inventory** ([`docs/cockpit-control-inventory.md`](cockpit-control-inventory.md)): honest and well-disciplined, but **it has no Settings row at all** despite `NAV` listing 11 sections; **9 of its findings are now fixed** and were confirmed fixed in-browser; and it **claims a regression suite (`tests/e2e/control-inventory.spec.ts`) that does not exist in the tree**. Its coverage claims are therefore unbacked and are not credited.
+
+### Four defects found
+
+| # | Sev | Finding | State |
+| --- | --- | --- | --- |
+| B-1 | ~~HIGH~~ **→ local state, not a product defect** | `infra/kill-switch/data/events.jsonl` is 0 bytes, so `journal.ts` correctly refuses it (`Empty kill journal: manual recovery required`) and `pnpm dev` cannot start. | **Reclassified.** `git ls-files infra/kill-switch/data/` is empty and `.gitignore:8` ignores `data/`, so **a fresh clone has no such file and never reaches this path** — `initialize()` creates the journal and writes its `initialized` sentinel. The audit's "a fresh clone cannot run the product" conclusion is **wrong**. This is one machine's corrupted local artifact. The audit was right not to reset it: it is a preserved emergency artefact, and Rule 7 plus the runbook make recovery an owner decision. `[ ]` 🚨 owner |
+| B-2 | LOW | Audit-chain verdict row sits flush against its panel border (`cockpit.tsx` `.metric-context` inside `.panel`: panel padding 0 + `overflow: hidden`). Measured 1 px from left and bottom where the heading is inset 23 px. Renders clipped. | `[ ]` |
+| B-3 | **MEDIUM** | **Approval → orchestrator resume fails every time**, reproduced twice with the orchestrator healthy on :4300 and `POST /api/runs` returning 201 in the same session. The decision **is** durably saved and `route.ts:88` returns 202 non-destructively, so it **fails safe** — but the run never auto-resumes, and the "Retry resume from Activity" banner the toast promises does not render. | `[ ]` 🚨 root cause unconfirmed |
+| B-4 | LOW | An unknown route silently renders Overview (`page.tsx:5`, no runtime guard). | `[ ]` |
+
+**B-3 is the one that matters.** It sits directly on the owner-approval path — a recorded owner decision that does not resume the agent is a control that stops halfway. It is not a safety failure (the decision persists and nothing is spent), but the human-on-the-loop loop does not close. Root cause is unconfirmed; the leading hypothesis is `manager.resume` re-verifying through `GET /api/interrupts` (`app.ts:79-87`) and surfacing a 503, or the resume call needing an owner token in a form not yet reproduced.
+
+**Two judgement calls recorded as correct.** The audit opened the Emergency stop dialog, confirmed all three gates (reason, exact phrase, reauthentication) and **did not submit** — it is a durable one-way latch and engaging it would wedge the stack; that is not an audit's decision to take unilaterally. It also did not reset the 0-byte journal. Both are the right calls.
+
+**Deliberately UNVERIFIED, not skipped:** Shopify OAuth install, all live-mode/Supabase auth, the refund and add-product forms, every Autonomy per-tab save, the 75-input pilot approval gate, and **every mobile/narrow viewport** (the audit stayed at 1440×900, so the responsive work in §0.7.5 is not re-verified here).
+
 ## 8.9 Next checkpoint
 
 1. **CP-02 close-out** — re-run both workflows once Docker Hub recovers; obtain green `validate` on a real SHA; merge PR #5 under the owner's merge authority. Do not merge while any container step is red.
