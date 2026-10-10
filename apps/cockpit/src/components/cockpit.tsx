@@ -70,6 +70,10 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+// A value import, separate from the `import type` block below: `SECTION_IDS` is read at
+// module scope to validate NAV, so a type-only import would compile as a value use and
+// fail the typecheck.
+import { SECTION_IDS } from "@/lib/types";
 import type {
   Activity,
   Agent,
@@ -109,6 +113,17 @@ const NAV: { id: Section; name: string; icon: LucideIcon }[] = [
   { id: "activity", name: "Activity", icon: ActivityIcon },
   { id: "settings", name: "Settings", icon: Settings2 },
 ];
+
+// The navigation and the catch-all route both resolve against `SECTION_IDS` in
+// `@/lib/types`, so a screen cannot be added to one and forgotten by the other. This
+// runtime check is the assertion that keeps that true; it fails the build rather than
+// leaving a nav entry whose route 404s.
+const NAV_MISMATCH = NAV.filter((entry) => !SECTION_IDS.includes(entry.id));
+if (NAV_MISMATCH.length > 0) {
+  throw new Error(
+    `Cockpit navigation contains screens the router does not accept: ${NAV_MISMATCH.map((entry) => entry.id).join(", ")}`,
+  );
+}
 const HEADINGS: Record<Section, { title: string; subtitle: string }> = {
   autonomy: {
     title: "Your business. Your operating rules.",

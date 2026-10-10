@@ -1367,6 +1367,49 @@ The remaining, strongly supported explanation: the audit resolved a **stale appr
 
 **Deliberately UNVERIFIED, not skipped:** Shopify OAuth install, all live-mode/Supabase auth, the refund and add-product forms, every Autonomy per-tab save, the 75-input pilot approval gate, and **every mobile/narrow viewport** (the audit stayed at 1440×900, so the responsive work in §0.7.5 is not re-verified here).
 
+## 8.10 N9 — credential isolation for build and test · CLOSED
+
+`[x]` **Closed with a before/after canary measurement.** The leak was reproduced on demand and is now unreachable.
+
+**Before.** `GITHUB_MCP_TOKEN=CANARY_…` plus `pnpm build --force`, then a grep of `apps/{cockpit,storefront}/.next` and `.turbo` — **3,668 files / 4.93 GB scanned, 4 occurrences**, in exactly the `…/cache/turbopack/v16.3.4-299180d3/*.sst` files from the 2026-10-08 incident.
+
+**After.** The same two packages, caches purged so the build is genuinely cold, with **nine** canaries set at once (`GITHUB_TOKEN`, `TURBO_TOKEN`, `LITELLM_MASTER_KEY`, `SHOPIFY_CLIENT_SECRET`, `KILL_SWITCH_OWNER_TOKEN`, `SUPABASE_SERVICE_ROLE_KEY` and others) — **3,591 files / 5.51 GB scanned, 0 occurrences**, and **0** again after a real `pnpm test:e2e`.
+
+Every number is from a **cold** build. A warm `pnpm build` reported "7 cached, 8 total" and re-serialised nothing, which is exactly why one cold build was enough to land a credential on disk in the first place.
+
+**The fix sits in the parent of Turbo**, so Turbo's `GITHUB_*` passthrough has nothing left to pass through. `turbo.json` is deliberately untouched and still declares no `env`, because that cannot work. Fail-closed: an unrecognised variable is **dropped**, which is the property that stops the *next* unknown agent credential from being serialised — adding a build input is now a deliberate edit.
+
+Legitimate inputs are asserted to survive byte-identical: `PATH`, `CI`, `NODE_ENV`, `NODE_OPTIONS`, `TURBO_FORCE`, `NEXT_PUBLIC_*`, `HOTL_*`, `GUARDRAIL_*`, `KILL_SWITCH_*`. `GITHUB_TOKEN` is blocked with the rest of the `GITHUB_` prefix: `actions/checkout` reads `${{ github.token }}` from the Actions **expression context** and runs as the first step, so it is unaffected, and letting it through would reopen this exact class.
+
+**Residual, not closed by this work:**
+
+- 🆕 **A credential already written to a cache outlives the pipeline fix.** The pre-fix canary was still sitting in the storefront `.sst` *after* the fix landed. Purging `.next/cache/turbopack` is a separate, mandatory step, and any credential that ever reached a build must be rotated. Both caches were purged and rebuilt clean here.
+- 🆕 `apps/cockpit/package.json` and `apps/storefront/package.json` still contain a raw `"build": "next build"`. `pnpm build`, `pnpm test` and `pnpm typecheck` are safe because the scrub sits above Turbo, but `pnpm --filter @hotl/cockpit build` bypasses it. Needs an edit in app scope.
+- 🆕 `apps/commerce-core/medusa` is an isolated npm project outside the workspace, runs in CI, and still bundles unscrubbed.
+- The `GITHUB_TOKEN`/checkout argument is reasoned from `ci.yml` and the upstream action definition; **no GitHub Actions run was available to observe it.**
+
+## 8.11 B-3 — approval resume now reports an accurate outcome · FIXED
+
+`[x]` **Fixed**, with the reproduction evidence in [`docs/b3-resume-evidence.md`](b3-resume-evidence.md).
+
+**B-3 was never a failure of approval resolution.** Two cases were reproduced in a real browser:
+
+| Case | Result |
+| --- | --- |
+| Fresh run, valid checkpoint | `POST /api/runs` → **201**; resolve → **200** with **no `warning` key**; orchestrator → **200 `completed`**, `resolvedInterruptIds` populated. **Works.** |
+| Stale approval, checkpoint gone | Orchestrator → **404 `RUN_REQUEST_FAILED` "This run has no saved checkpoint."** |
+
+The resume machinery is sound; the **reporting** was the defect. `route.ts` wrapped the resume in a bare `catch {}` that discarded both status and body and emitted one sentence for every failure — including telling the owner to *"retry resume from Activity after the orchestrator reconnects"* when the run can never be resumed again.
+
+**Two corrections to earlier checkpoint claims, both settled by evidence:**
+
+- 🆕 **"No seeded demo approvals exist" was wrong.** `apps/guardrail-service/src/seed.ts:25` seeds three *pending, resolvable* approvals bound to fabricated run ids (`run-support-01`, `run-marketing-01`, `run-sourcing-01`). They are real rows, listed in the cockpit, and reachable.
+- An approval outlives its run because `state.interrupts` is pruned only on resolve or Constitution change (`engine.ts:823`). The orchestrator's 404 is **deliberate** (`manager.ts:95-96`, rule 7 — a run with no checkpoint must not report a fabricated success).
+
+**The fix** extracts the decision into a pure, tested function, [`apps/cockpit/src/lib/resume-notice.ts`](../../apps/cockpit/src/lib/resume-notice.ts). A **404** is reported as permanent and **offers no retry**; an unreachable orchestrator stays retryable and says so; any other refusal names the orchestrator's own code. The durable owner decision is unchanged in every branch — that is what keeps this fail-safe rather than fail-open — and six tests pin it.
+
+**A self-inflicted defect found and fixed during this work, recorded because it is the same class again:** the B-4 routing fix initially exported its guard from `components/cockpit.tsx`, a `"use client"` module. A server component importing a function from a client module throws on **every** route. It was caught only because a teammate reported a 500 across the app while my own single-spec run passed. The registry now lives in `@/lib/types`, a plain module, and `page.tsx` imports it from there. **23/23 browser tests pass.** That is the eighth instance of "green locally, broken in context".
+
 ## 8.9 Next checkpoint
 
 1. **CP-02 close-out** — re-run both workflows once Docker Hub recovers; obtain green `validate` on a real SHA; merge PR #5 under the owner's merge authority. Do not merge while any container step is red.
