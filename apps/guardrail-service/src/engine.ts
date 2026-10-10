@@ -201,6 +201,67 @@ export class GuardrailEngine {
     } catch {return false;}
   }
 
+  /**
+   * True when a lock file sits at `lockPath` and its owner may still be writing.
+   *
+   * This is the judgement `orphaned()` makes, inverted, and it exists to be re-run at the
+   * exact moment a recovery deletes the file. Judging the owner dead and deleting its lock
+   * are two separate steps, so between them the lock can be recovered and re-taken by a live
+   * writer -- and deleting that writer's lock puts two processes inside one critical section.
+   * Anything unreadable or unparseable counts as occupied, so uncertainty deletes nothing.
+   */
+  private async occupied(lockPath:string):Promise<boolean> {
+    let recorded:string;
+    try {recorded=(await readFile(lockPath,'utf8')).trim();}
+    catch(error) {return (error as NodeJS.ErrnoException).code!=='ENOENT';}
+    if(!/^\d+$/.test(recorded))return true;
+    const owner=Number(recorded);
+    if(owner===process.pid)return true;
+    try {process.kill(owner,0);return true;}
+    catch(error) {return (error as NodeJS.ErrnoException).code!=='ESRCH';}
+  }
+
+  /**
+   * Claim the single-winner right to recover an abandoned lock.
+   *
+   * `open(path,'wx')` is the only atomic create-if-absent primitive available portably here,
+   * so the reclaim token is what makes recovery mutually exclusive: exactly one process can
+   * hold it, therefore exactly one process can ever delete an orphaned lock.
+   *
+   * Without it, two processes recovering the SAME abandoned lock both pass the dead-owner
+   * test, and the slower one's unconditional `unlink` then deletes the faster one's freshly
+   * acquired lock. Both are then inside the critical section doing read-modify-write on the
+   * ledger, neither ever lost the lock from its own point of view so the ownership-checked
+   * release cannot help, and the daily ceiling is enforced against two copies of one state --
+   * which is how two grants are issued against a single budget.
+   *
+   * A token already on disk is refused outright, including when its recorded owner is
+   * provably dead. Reclaiming a stale token reproduces this identical race one level up, so
+   * it is an operator decision: an uncertain lock denies rather than self-healing.
+   */
+  private async claimReclaim(tokenPath:string):Promise<Awaited<ReturnType<typeof open>>> {
+    try {
+      const token=await open(tokenPath,'wx');
+      try {await token.writeFile(String(process.pid));await token.sync();}
+      catch(error) {await token.close().catch(()=>{});await unlink(tokenPath).catch(()=>{});throw error;}
+      return token;
+    } catch {
+      throw new GuardrailError('STATE_BUSY','The guardrail state lock is abandoned and is already being recovered by another process, or an earlier recovery stopped part-way. Retry with the same key; if the retry keeps failing, follow the stale-lock runbook before restarting.',503);
+    }
+  }
+
+  private async releaseReclaim(token:Awaited<ReturnType<typeof open>>,tokenPath:string):Promise<void> {
+    await token.close().catch(()=>{});
+    // Unlike the lock, the token needs no ownership re-read. It was created with `open(...,'wx')`
+    // and every other process is refused at that same exclusive create, so nothing can replace
+    // it while this handle is open -- there is no window in which the path could name a token
+    // belonging to someone else. Deleting it unconditionally is therefore safe, and it removes
+    // the one failure mode an ownership check would add: on Windows the re-read can observe a
+    // delete-pending name and skip the delete, leaving a token that wedges every later recovery.
+    try {await unlink(tokenPath);}
+    catch(error) {if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}
+  }
+
   private async applyTransaction(state:EngineState,operation:string,payload:unknown,actor:Actor,key:string,action:(state:EngineState)=>Promise<Result>|Result) {
     const fingerprint=digest({operation,payload,actor,mode:this.mode});
     // The persisted key format is deliberately unchanged. `state.idempotency` is part of the
@@ -256,8 +317,10 @@ export class GuardrailEngine {
         return structuredClone(committed.result);
       }
       let handle:Awaited<ReturnType<typeof open>>|undefined;
+      let reclaim:Awaited<ReturnType<typeof open>>|undefined;
       const lockPath=this.options.filePath ? `${this.options.filePath}.lock` : undefined;
-      if(lockPath) {
+      const reclaimPath=lockPath ? `${lockPath}.reclaim` : undefined;
+      if(lockPath&&reclaimPath) {
         try {handle=await open(lockPath,'wx');await handle.writeFile(String(process.pid));await handle.sync();}
         catch(error) {
           const code=(error as NodeJS.ErrnoException).code;
@@ -270,9 +333,23 @@ export class GuardrailEngine {
             // is allowed ONLY for a provably dead owner: an unreadable, empty or foreign lock
             // still denies, so an uncertain situation fails closed.
             if(code==='EEXIST'&&await this.orphaned(lockPath)) {
-              try {await unlink(lockPath);} catch {throw new GuardrailError('STATE_BUSY','The guardrail state lock is unavailable; retry with the same key.',503);}
-              try {handle=await open(lockPath,'wx');await handle.writeFile(String(process.pid));await handle.sync();}
-              catch {throw new GuardrailError('STATE_BUSY','The guardrail state lock is unavailable; retry with the same key.',503);}
+              reclaim=await this.claimReclaim(reclaimPath);
+              try {
+                // Re-judge immediately before deleting. Another reclaimer may have completed
+                // and a live writer taken the lock in the gap between `orphaned()` and here;
+                // deleting that lock is the defect this whole sequence exists to prevent.
+                if(await this.occupied(lockPath))throw new GuardrailError('STATE_BUSY','The guardrail state lock is unavailable; retry with the same key.',503);
+                try {await unlink(lockPath);}
+                catch(error) {if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}
+                try {handle=await open(lockPath,'wx');}
+                catch {throw new GuardrailError('STATE_BUSY','The guardrail state lock is unavailable; retry with the same key.',503);}
+                await handle.writeFile(String(process.pid));
+                await handle.sync();
+              } catch(error) {
+                await this.releaseReclaim(reclaim,reclaimPath);reclaim=undefined;
+                if(error instanceof GuardrailError)throw error;
+                throw new GuardrailError('STATE_BUSY','The guardrail state lock is unavailable; retry with the same key.',503,{cause:faultLabel(error)});
+              }
             } else throw new GuardrailError('STATE_BUSY','The guardrail state lock is unavailable; retry with the same key.',503);
           } else throw error;
         }
@@ -322,6 +399,11 @@ export class GuardrailEngine {
             if((await readFile(lockPath,'utf8')).trim()===String(process.pid))await unlink(lockPath);
           } catch {}
         }
+        // The reclaim token is released on every exit path, including a denial or an
+        // unexpected fault -- otherwise a refused transaction would wedge every later
+        // recovery, which is a denial of service created by this fix rather than prevented
+        // by it. A token left behind is therefore always a genuinely abandoned recovery.
+        if(reclaim&&reclaimPath)await this.releaseReclaim(reclaim,reclaimPath);
       }
     };
     const pending=this.tail.then(work,work);this.tail=pending.catch(()=>{});return pending;
