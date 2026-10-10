@@ -1343,10 +1343,25 @@ Delivered in [`docs/cockpit-route-and-settings-inventory.md`](cockpit-route-and-
 | --- | --- | --- | --- |
 | B-1 | ~~HIGH~~ **→ local state, not a product defect** | `infra/kill-switch/data/events.jsonl` is 0 bytes, so `journal.ts` correctly refuses it (`Empty kill journal: manual recovery required`) and `pnpm dev` cannot start. | **Reclassified.** `git ls-files infra/kill-switch/data/` is empty and `.gitignore:8` ignores `data/`, so **a fresh clone has no such file and never reaches this path** — `initialize()` creates the journal and writes its `initialized` sentinel. The audit's "a fresh clone cannot run the product" conclusion is **wrong**. This is one machine's corrupted local artifact. The audit was right not to reset it: it is a preserved emergency artefact, and Rule 7 plus the runbook make recovery an owner decision. `[ ]` 🚨 owner |
 | B-2 | LOW | Audit-chain verdict row sits flush against its panel border (`cockpit.tsx` `.metric-context` inside `.panel`: panel padding 0 + `overflow: hidden`). Measured 1 px from left and bottom where the heading is inset 23 px. Renders clipped. | `[ ]` |
-| B-3 | **MEDIUM** | **Approval → orchestrator resume fails every time**, reproduced twice with the orchestrator healthy on :4300 and `POST /api/runs` returning 201 in the same session. The decision **is** durably saved and `route.ts:88` returns 202 non-destructively, so it **fails safe** — but the run never auto-resumes, and the "Retry resume from Activity" banner the toast promises does not render. | `[ ]` 🚨 root cause unconfirmed |
+| B-3 | **MEDIUM** | **Approval → orchestrator resume fails every time**, reproduced twice with the orchestrator healthy on :4300 and `POST /api/runs` returning 201 in the same session. The decision **is** durably saved and `route.ts:88` returns 202 non-destructively, so it **fails safe** — but the run never auto-resumes, and the "Retry resume from Activity" banner the toast promises does not render. | `[ ]` 🚨 see below |
 | B-4 | LOW | An unknown route silently renders Overview (`page.tsx:5`, no runtime guard). | `[ ]` |
 
-**B-3 is the one that matters.** It sits directly on the owner-approval path — a recorded owner decision that does not resume the agent is a control that stops halfway. It is not a safety failure (the decision persists and nothing is spent), but the human-on-the-loop loop does not close. Root cause is unconfirmed; the leading hypothesis is `manager.resume` re-verifying through `GET /api/interrupts` (`app.ts:79-87`) and surfacing a 503, or the resume call needing an owner token in a form not yet reproduced.
+**B-3 is the one that matters**, and the diagnosis has been narrowed by reading the code rather than by inference — but it is **not yet closed**, because doing so requires reproducing it in a browser, which this session did not complete.
+
+What is **proven** from the source:
+
+- Interrupts are created **only** by a genuine policy escalation (`engine.ts:595`); there are **no seeded demo interrupts** in the guardrail. So an item in Approvals is not a placeholder.
+- `state.interrupts` is persisted in full and returned in every snapshot; entries are only removed by resolution or by Constitution-change expiry (`engine.ts:823`). **A pending approval from an earlier run therefore stays listed and resolvable after that run's graph checkpoint is gone.**
+- `manager.resume` correctly refuses such a run: `manager.ts:95-96` throws `404 "This run has no saved checkpoint."` — added deliberately, per the comment, to stop a fabricated "resolved, seeded" success (rule 7).
+- The cockpit's proxy **forwards the `Idempotency-Key`** when the browser sends one (`route.ts:20-22` → `proxy.ts:60`), so the header requirement at `app.ts:74` is satisfied on the normal path. The audit's leading hypothesis is therefore **not** supported.
+- `tests/e2e/platform.spec.ts:78` — "a cockpit cycle pauses in LangGraph and resumes after a saved owner decision" — **passes in CI**, so resume works end to end for a run started in the same session.
+
+The remaining, strongly supported explanation: the audit resolved a **stale approval from a previous run**, whose resume correctly 404s. What is genuinely defective is the **presentation and diagnosability**, not the guard:
+
+1. `route.ts:85-89` wraps the resume in a bare `catch {}` that swallows the real reason and reports *"the orchestrator reconnects"* — which is **factually wrong** when the cause is a missing checkpoint. The operator is sent to the wrong page to retry something that can never succeed.
+2. The promised "Retry resume from Activity" banner does not render.
+
+**Next action, deliberately not taken blind:** reproduce in a browser against a **freshly started run** to confirm the stale-interrupt case, then change the catch to surface the orchestrator's actual status and wording, and add an e2e case asserting a stale approval is refused **honestly** rather than reported as a reconnection problem. Editing cockpit route semantics without first reproducing it is exactly the failure mode this checkpoint has logged seven times.
 
 **Two judgement calls recorded as correct.** The audit opened the Emergency stop dialog, confirmed all three gates (reason, exact phrase, reauthentication) and **did not submit** — it is a durable one-way latch and engaging it would wedge the stack; that is not an audit's decision to take unilaterally. It also did not reset the 0-byte journal. Both are the right calls.
 
