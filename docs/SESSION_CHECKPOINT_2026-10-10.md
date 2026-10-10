@@ -149,6 +149,8 @@ block is an owner decision, not a CI problem, and it is correctly not ours to cl
 
 # 11. Verified state at `644af81` — supersedes §10's ledger
 
+> **§12 below supersedes §11's open ledger.** Read §12 for current verified state.
+
 Everything below was **observed on this machine or on a real runner**, not accepted on report.
 `main` is still `13a74aa` and still red. **No gate moved.** Gates A, B and C are unchanged.
 
@@ -226,3 +228,76 @@ this because the next session will otherwise lose another hour to it.**
 **Unreachable by construction, and therefore not defects:** Gate A (no owner-approved business
 envelope), Gate B (no provisioned staging), Gate C (**zero** external Shopify evidence), Gate D, Gate E.
 No commerce capability has reached M4. **M4 has been reached only for the CI pipeline itself.**
+
+
+
+---
+
+# 12. Verified state: D-2 pilot approval, cockpit controls, and contrast audit
+
+§§0–11 are preserved history. **§12 supersedes §11.4's open ledger.**
+No gate moved. Gates A, B and C remain exactly as recorded: blocked on owner/external authority.
+
+## 12.1 Landed in this milestone
+
+### 1. D-2 — Pilot approval happy path and authority guarantees (`[x]`)
+- **Unit & Integration:** `apps/guardrail-service/test/pilot-approval.test.ts` (18 deterministic tests).
+  - Drives `GuardrailEngine.approvePilot` through a gap-free `PilotDraft` to `allow`.
+  - Verifies version increment (`version + 1`), authority recording in `pilot.approval` (`approvedBy`, `approvedAt`, `constitutionVersion`, `draftDigest`).
+  - Re-reads raw JSON and rehydrates through a separate engine instance to confirm persistence.
+  - Verifies durable audit entry (`constitution.pilot-approved`) and hash chain verification (`assertChain`).
+  - Tests 10 negative gap paths (`PILOT_PROFILE_INCOMPLETE`, `PILOT_CURRENCY_UNSUPPORTED`, `PILOT_ECONOMICS_INCOMPLETE`, `PILOT_ECONOMICS_SOURCE_REQUIRED`, `PILOT_OWNER_LIMITS_REQUIRED`, `PILOT_LIMITS_CONFLICT`, `PILOT_STOP_RULES_REQUIRED`, `PILOT_STOP_SIGNAL_UNAVAILABLE`, `PILOT_STOP_RULES_DUPLICATED`, `PILOT_ECONOMICS_CALCULATION_INVALID`).
+  - Tests `CONSTITUTION_CHANGED` on stale expected version.
+  - Tests `OWNER_REQUIRED` (403) on non-owner actor without state mutation or key consumption.
+  - Tests replay protection: replayed key returns `{...recorded.result, replayed: true}` without incrementing version or producing duplicate audit entries.
+  - Tests stale authority invalidation: modifying draft immediately invalidates `draftDigest` matching.
+  - Vacuity checks: verified that skipping version bump causes 6 authority tests to fail; modifying digest target causes digest check to fail.
+- **E2E Browser:** `tests/e2e/pilot-approval.spec.ts` (1 spec, 16.3s).
+  - Drives all 35 inputs across Profile, Economics, and Capital, plus both mandatory stop rules.
+  - Proves the cockpit UI reaches and renders the real `allow` with `Approved by … for Constitution version N.`.
+- **Evidence Document:** [`docs/pilot-approval-evidence.md`](pilot-approval-evidence.md).
+
+### 2. Cockpit controls: search, status filter, detail modal, finance period, autonomy reload (`[x]`)
+- `tests/e2e/cockpit-controls-and-contrast.spec.ts` (4 control tests):
+  - Search and status filters on `/approvals`, `/products`, `/orders`, `/activity`.
+  - Activity audit detail modal open, facts verification, and Escape key dismissal.
+  - Finance period selection (`7d`, `30d`, `all`) and Refresh action.
+  - Autonomy "Reload saved policy" action.
+
+### 3. WCAG 2.1 AA Color Contrast Audit (`[x]`)
+- Comprehensive automated contrast audit across 8 primary routes (`/`, `/products`, `/orders`, `/finance`, `/activity`, `/autonomy`, `/settings`, `/guardrails`) in both Light mode and Dark mode.
+- Evaluates relative luminance per WCAG 2.1 formula ($L = 0.2126R + 0.7152G + 0.0722B$) against effective background.
+- Respects official WCAG 2.1 SC 1.4.3 exemptions (logotypes, disabled controls, offscreen skip links, incidental separators).
+- **Fixes applied:**
+  - CSS import order corrected in `apps/cockpit/src/app/layout.tsx`: `tokens.css` → `globals.css` → `operating.css` → `design-system.css`, restoring the documented cascade contract.
+  - Swapped token definition order in `apps/cockpit/src/app/tokens.css` so `:root[data-theme="dark"]` overrides default light tokens.
+  - Deepened light mode secondary typography (`--ds-text-subtle`, `--ds-text-muted`, `.panel-header p`, `.page-heading p`, `th`, `td`, `.result-count`, `.table-link`, `.form-label`, `.muted-small`, `.setting-row p`, `.page-footer`, `.approval-item-label`) to ensure >= 4.5:1 contrast against white/canvas.
+  - Fixed dark mode overrides in `apps/cockpit/src/app/operating.css` for `th`, `.product-cell strong`, `.customer-cell strong`, `.strip-tag`, `.metric-context`, `.table-link`, `.customer-avatar`, `.margin-value`, and `.autonomy-card a` to achieve >= 7:1 contrast on dark surfaces.
+  - Status badges (`.badge.green`, `.badge.amber`, `.badge.red`, `.count-badge`) deepened to satisfy >= 4.5:1.
+  - All 16 contrast audit tests pass (8 routes × 2 themes).
+
+## 12.2 Verification Summary at this Commit
+
+| Suite | Command | Result |
+| --- | --- | --- |
+| Linter | `pnpm lint` | **exit 0** |
+| Typecheck | `pnpm typecheck --force` | **exit 0** (11/11 tasks, 0 cached) |
+| Workspace unit/integration tests | `pnpm test` | **exit 0** (29 root tests, 11/11 package tasks) |
+| Production build | `pnpm build --force` | **exit 0** (8/8 tasks) |
+| Credential cache scan | `node scripts/scan-build-cache.mjs` | **exit 0** (0 credential values in build outputs) |
+| Playwright E2E suite | `pnpm test:e2e` | **51 passed / 51, 0 failed** (12 spec files, 2.2 min) |
+| Guardrail service unit tests | `vitest run` | **32 files, 391 passed**, 26 skipped, 0 failed |
+| Orchestrator unit tests | `vitest run` | **9 files, 55 passed**, 0 failed |
+
+## 12.3 Open Ledger
+
+| # | Item | State |
+| --- | --- | --- |
+| 🚨 — | **Approve and merge PR #5.** `MERGEABLE`, `validate: SUCCESS`, `mergeStateStatus: BLOCKED`, **0 reviews**. `main` requires one approving review; only the owner can give it and no agent will self-approve. | **Owner authority.** |
+| 🚨 D1 | Rotate the fine-grained PAT disclosed on 2026-10-08 | **Owner action.** |
+| 🚨 B-1 | Recover the preserved 0-byte kill journal | **Owner-authorised runbook recovery.** |
+| `[ ]` | N1 — recompute the 19 staged settings against a real provisioned environment | Needs provisioned cloud staging infrastructure. |
+| `[ ]` | 37 of 39 recursive-`rm` teardown sites still use Node's default `maxRetries: 0` | Minor cleanup candidate for Windows teardown robustness. |
+| `[ ]` | Shopify OAuth, live-mode/Supabase auth, connection lifecycle | Unreachable or unexercised by construction in local simulation. |
+
+**Unreachable by construction:** Gates A, B, C, D, and E remain blocked until real owner authorization, staging infrastructure, and Shopify development store credentials exist. No mock data is claimed as live evidence.

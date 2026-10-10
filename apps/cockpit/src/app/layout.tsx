@@ -1,8 +1,8 @@
 import type { Metadata } from 'next';
 import './tokens.css';
-import './design-system.css';
 import './globals.css';
 import './operating.css';
+import './design-system.css';
 
 export const metadata: Metadata = {
   title: 'HOTL — Owner cockpit',
