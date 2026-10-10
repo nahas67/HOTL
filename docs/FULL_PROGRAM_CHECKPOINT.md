@@ -1412,8 +1412,87 @@ The resume machinery is sound; the **reporting** was the defect. `route.ts` wrap
 
 ## 8.9 Next checkpoint
 
+> **Superseded by §9.4 and §9.5**, which reflect live state at `1d58ac3`. Items 2 and 4 below are now **done** (CP-03B delivered; N7 resolved — the image build and artifact export now run and pass in CI). Items 1 and 3 remain open; item 5 stands.
+
 1. **CP-02 close-out** — re-run both workflows once Docker Hub recovers; obtain green `validate` on a real SHA; merge PR #5 under the owner's merge authority. Do not merge while any container step is red.
 2. **CP-03B** — the cockpit route/control and vertical Settings audit. `settings-page.tsx` (75 KB) and `operating-pages.tsx` (44 KB) exist and the browser drill covers their layout, but no per-control classification of working / simulated / disabled yet exists.
 3. **N1** — recompute the 19 staged settings against a real provisioned environment rather than a recorded shell.
 4. **N7** — prove the kill-switch image actually builds and is independently deployable, once the registry is reachable.
 5. Gate A remains blocked on the owner and cannot be advanced by any agent.
+
+---
+
+## 9. Session reconciliation — 2026-10-10 (authoritative as of this commit)
+
+### 9.1 Named documents that do not exist
+
+Three documents were named as required reading:
+
+| Named | Status |
+| --- | --- |
+| `HOTL_ARCHITECTURE_RECONCILIATION_2026-10-10.md` | **Does not exist.** Not tracked, not on disk. |
+| `HOTL_MASTER_CHECKPOINT_RECONCILED_2026-10-10.md` | **Does not exist.** Not tracked, not on disk. |
+| `HOTL_CHANGE_VERIFICATION_MATRIX_2026-10-10.md` | **Does not exist.** Not tracked, not on disk. |
+
+Verified with `git ls-files --error-unmatch` against the live repository. **They were not read, because they are not there.** The authoritative equivalents in this repository are:
+
+- **Master checkpoint and working plan — this file.** `docs/FULL_PROGRAM_CHECKPOINT.md`; §§8–9 are current, §§0–7 are preserved history superseded only where they conflict.
+- **Change/verification matrix — §§8.2–8.11 and 9.3**, which carry per-change CI run IDs, before/after measurements and named commands.
+- **Cockpit control matrix —** [`docs/cockpit-route-and-settings-inventory.md`](cockpit-route-and-settings-inventory.md) (CP-03B, browser-backed).
+- **Security matrix —** [`docs/credential-exposure-status-2026-10-10.md`](credential-exposure-status-2026-10-10.md) and §8.10.
+- **B-3 reproduction evidence —** [`docs/b3-resume-evidence.md`](b3-resume-evidence.md).
+- **Architecture —** `docs/repo-structure.md`, `docs/implementation-notes.md`, `README.md`. There is **no reconciled target-architecture document**; recorded as 🆕 **N10**.
+
+### 9.2 Live Git and CI state at this commit
+
+| Item | State |
+| --- | --- |
+| Branch | `codex/cp02-ci-red-2026-10-10` |
+| HEAD | `1d58ac3` |
+| `origin/main` | `13a74aa` — **unchanged and still red**; PR #5 has not landed |
+| Divergence | **13 ahead, 0 behind** |
+| PR #5 | `OPEN`, `MERGEABLE`, `mergeStateStatus: BLOCKED`, **0 reviews** |
+| Branch protection | `main` requires `validate` **and 1 approving review**, `strict: true` |
+| CI at `1d58ac3` | `Isolated kill-switch checks and image` **SUCCESS**; `Main platform checks` **SUCCESS** (runs `38018722514`, `38018722422`) |
+| Worktree | Clean apart from three untracked, superseded root audit documents (§9.1) |
+
+The merge is blocked **only** on an approving review, which only the owner can give. No agent self-approves and branch protection is not weakened.
+
+### 9.3 Verified maturity — what is actually true
+
+| Area | Maturity | Evidence |
+| --- | --- | --- |
+| CI pipeline, both workflows | **M4 remote-verified** | SUCCESS at `1d58ac3`, including image build, artifact export, cross-process drill, both PostgreSQL drills and the credential scan |
+| Deterministic financial guardrail | **M3 integration** | 325 guardrail tests; concurrency ceiling proved with `race-a` allow / `race-b` `DAILY_CEILING_EXCEEDED` |
+| Ledger lock + ownership release | **M3** | D-B defect fixed; release is now ownership-verified |
+| Independent kill switch | **M3** | 36 tests; cross-process single-writer drill now genuinely runs |
+| Approval / resume reporting | **M3** | B-3 fixed; 6 tests; browser evidence in `b3-resume-evidence.md` |
+| Cockpit UI and Settings | **M2/M3** | 23/23 browser tests; CP-03B classified 11 routes and 9 panels |
+| Build/test credential isolation | **M3** | Canary 4 → 0 across 5.51 GB of caches, cold build |
+| Real commerce (Shopify, payments, suppliers) | **M0–M2** | **No external provider evidence. Gate C remains blocked.** |
+| Autonomy | **M0** | No measured shadow performance. Gate E blocked. |
+
+**M4 has been reached only for the CI pipeline itself.** No commerce capability has reached M4. Gates A, B and C are unchanged and blocked.
+
+### 9.4 Open ledger carried forward
+
+| # | Item | State |
+| --- | --- | --- |
+| 🚨 D1 | Revoke the disclosed fine-grained PAT | Owner. No rotation evidence exists in the repository. |
+| 🚨 — | Approve and merge PR #5 | Owner. The sole reason `main` is still red. |
+| 🚨 B-1 | Recover the preserved 0-byte kill journal | Owner-authorised runbook recovery. **Not** reset by any agent. |
+| 🚨 N1 | Recompute the 19 staged settings against a real provisioned environment | `[ ]` |
+| 🆕 N9a | `apps/cockpit/package.json` and `apps/storefront/package.json` still contain a raw `next build`; `pnpm --filter` bypasses the scrub | `[ ]` |
+| 🆕 N9b | `apps/commerce-core/medusa` is outside the workspace and still bundles unscrubbed | `[ ]` |
+| 🆕 N9c | A credential already written to a cache outlives the pipeline fix; purge `.next/cache/turbopack` and rotate anything that ever reached a build | `[ ]` 🚨 |
+| 🆕 N10 | No reconciled target-architecture document exists | `[ ]` |
+| `[ ]` | B-2 Activity layout clipping — needs browser measurement before any CSS change | `[ ]` |
+| `[ ]` | CP-03B remainder: refund form, add-product, Shopify OAuth, live-mode auth, Autonomy per-tab saves, the 75-input pilot gate, **all mobile viewports** | `[ ]` |
+
+### 9.5 Current working plan
+
+1. **CP-SEC** — close N9a / N9b / N9c with the canary method already proven in §8.10.
+2. **CP-CORE** — independent review of financial locks, concurrency, audit integrity, idempotency, checkpoints and the kill switch.
+3. **CP-03B** — B-2 plus the unverified control surface, prioritising financial actions, forms, authorization and mobile layouts.
+4. **CP-ARCH** — produce the reconciled target-architecture document (N10) from real source.
+5. **CP-05+** — Gates A/B/C remain owner- and externally-blocked; independent engineering continues around them.
