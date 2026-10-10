@@ -59,6 +59,18 @@ jobs:
         working-directory: sites/hotl-owner-console
         run: npm run build && npm test
       - run: pnpm build
+      # gitleaks below reads the working tree; this step reads the BUILD OUTPUTS the build
+      # just produced. It is the check that closes the 2026-10-08 incident class permanently:
+      # the environment scrub now stops `next build` serialising a process credential into
+      # Turbopack's on-disk cache, but until this ran automatically, a recurrence was only
+      # caught by whoever remembered to run the scanner by hand.
+      #
+      # Fail-closed by construction: exit 1 on a credential VALUE, and exit 2 -- never 0 --
+      # on anything it could not read, so an oversized or unreadable target cannot report
+      # itself as clean. No environment variable and no secret is passed to it; it reads
+      # files that already exist.
+      - name: Build outputs carry no credential values
+        run: node scripts/scan-build-cache.mjs
       - name: Install browser for application checks
         run: pnpm exec playwright install --with-deps chromium
       - name: Exercise the local simulation in the browser
