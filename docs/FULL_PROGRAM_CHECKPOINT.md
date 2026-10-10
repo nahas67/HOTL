@@ -1303,31 +1303,31 @@ The IPC defect was reproduced **deterministically** rather than won on a timing 
 
 | Item | State |
 | --- | --- |
-| `main` | **`13a74aa` — RED** (both workflows), unchanged by this session |
-| Repair branch | `codex/cp02-ci-red-2026-10-10` @ **`faeceec`**, pushed |
-| PR | **#5**, open, awaiting required check `validate` |
-| Branch protection | `main` requires `validate` — D3 from §6 is **now satisfied** |
+| `main` | **`13a74aa` — still RED.** Unchanged by this session; it needs PR #5 to land. |
+| Repair branch | `codex/cp02-ci-red-2026-10-10` @ **`cf409ed`**, pushed, 10 commits ahead of `main`, 0 behind |
+| PR | **#5** — `MERGEABLE`, both required checks **SUCCESS**, `mergeStateStatus: BLOCKED` |
+| Branch protection | `main` requires `validate` **and 1 approving review**, `strict: true` |
 | Gates A / B / C | **Unchanged. Blocked.** |
 | Local evidence | All six release steps green, uncached, plus both SQL drills |
 
-### Remote status on `faeceec` — everything that does not need a container is green
+### Remote status on `cf409ed` — **every check green**
 
-| Step | Result |
+| Workflow | Result |
 | --- | --- |
-| `pnpm lint` | **PASS** |
-| `pnpm typecheck` | **PASS** |
-| `pnpm test` | **PASS** — every package, previously the failing step |
-| Guarded Medusa payment bridge | **PASS** |
-| Owner console site tests | **PASS** — 5/5, after the D-F fix |
-| `pnpm build` | **PASS** |
-| Browser drill (`pnpm test:e2e`) | **PASS** — 20/20 |
-| Migration + RLS drill | `[ ]` — Docker Hub unreachable (N6) |
-| Runtime-ledger drill | `[ ]` — not reached |
-| Credential scan | `[ ]` — not reached |
+| `Isolated kill-switch checks and image` | **SUCCESS** |
+| `Main platform checks` | **SUCCESS** |
 
-`Isolated kill-switch checks and image`: `npm ci`, typecheck and **`npm test` all PASS** — the cross-process single-writer drill now genuinely executes for the first time. Only `docker build` fails, on Docker Hub authentication.
+Within `Main platform checks`: `pnpm lint`, `pnpm typecheck`, `pnpm test`, the guarded Medusa bridge, the owner-console Site tests, `pnpm build`, the **20/20** browser drill, and the **container checks** — the migration/RLS drill, the runtime-ledger drill and the credential scan — all **PASS**.
 
-**Every code-level check on the branch is green. The remaining red is entirely an external registry outage, and it is recorded as a blocker rather than removed from the pipeline.**
+Within the kill-switch workflow: `npm ci`, typecheck, `npm test`, **the image build**, and the artifact export all **PASS**.
+
+**This is the first time in this repository's history that all of the following have executed on a real runner:** the kill-switch image build (N7), the artifact export, the cross-process single-writer drill in the workflow built to validate it (D-D), both PostgreSQL drills, and the gitleaks credential scan (N8).
+
+### The one thing that remains, and it is correctly not mine
+
+`mergeStateStatus: BLOCKED` with `validate: SUCCESS` and `MERGEABLE` is **not** a CI problem. `main` requires **`required_approving_review_count: 1`**. Only the owner can supply that review, and **no agent may self-approve or grant it on the owner's behalf**. The branch is 10 commits ahead and 0 behind, so `strict: true` is satisfied.
+
+**CP-02 is therefore code-complete and remotely verified, with the final merge held for owner review authority.** Nothing was removed from the pipeline to reach green: both PostgreSQL drills, the credential scan, the real cross-process tests and the kill-switch image build all ran and all passed.
 
 ## 8.8b CP-03B — cockpit route, control and vertical Settings inventory
 
