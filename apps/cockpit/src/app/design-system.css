@@ -30,6 +30,19 @@
   background: var(--ds-canvas);
 }
 
+:root[data-theme="dark"] {
+  --canvas: var(--ds-canvas);
+  --paper: var(--ds-surface);
+  --ink: var(--ds-text);
+  --muted: var(--ds-text-muted);
+  --line: var(--ds-border);
+  --green: var(--ds-brand);
+  --green-dark: var(--ds-brand-strong);
+  --sage: var(--ds-brand-soft);
+  color: var(--ds-text);
+  background: var(--ds-canvas);
+}
+
 /* ============================================================
    2. Base refinement
    ============================================================ */
@@ -192,6 +205,10 @@ code,
   color: var(--ds-brand-strong);
   font-weight: var(--fw-semibold);
   border-color: var(--ds-border);
+}
+
+:root[data-theme="dark"] .nav-item {
+  color: var(--ds-text-muted);
 }
 
 :root[data-theme="dark"] .nav-item.active {

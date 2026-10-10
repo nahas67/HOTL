@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
-import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { access, mkdtemp, readFile, rename, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -26,9 +27,30 @@ import { KillJournal } from "../src/journal.js";
  */
 const here = dirname(fileURLToPath(import.meta.url));
 const holderEntry = resolve(here, "fixtures", "journal-holder.ts");
-const tsxLoader = pathToFileURL(
-  resolve(here, "..", "..", "..", "node_modules", "tsx", "dist", "loader.mjs"),
-).href;
+
+/**
+ * Locate the tsx loader across both install layouts this package is built by.
+ *
+ * The pnpm workspace hoists `tsx` to the repository root, but
+ * `.github/workflows/kill-switch-ci.yml` deliberately installs this service in
+ * ISOLATION -- `npm ci --workspaces=false` with `working-directory:
+ * infra/kill-switch` -- so the emergency plane can never silently depend on the
+ * main application's dependency tree. In that layout there is no root
+ * `node_modules`, so every child process died instantly with an unresolvable
+ * `--import` and both multiprocess tests failed on a 30s timeout having tested
+ * nothing at all. The isolation is correct and is preserved; only the path
+ * resolution was wrong.
+ */
+const tsxCandidates = [
+  resolve(here, "..", "..", "..", "node_modules", "tsx", "dist", "loader.mjs"), // pnpm workspace root
+  resolve(here, "..", "node_modules", "tsx", "dist", "loader.mjs"), // isolated npm ci
+];
+const tsxPath = tsxCandidates.find(candidate => existsSync(candidate));
+if (!tsxPath)
+  throw new Error(
+    `Cannot locate the tsx loader for child processes. Looked in:\n${tsxCandidates.join("\n")}`,
+  );
+const tsxLoader = pathToFileURL(tsxPath).href;
 
 const WORKERS = 3;
 
@@ -46,6 +68,27 @@ const exists = async (path: string) => {
     return true;
   } catch {
     return false;
+  }
+};
+
+/**
+ * Publishes a signal file atomically, matching what the child fixture does.
+ *
+ * `writeFile` creates the path before its payload is flushed, so a peer polling
+ * with `access()` can see the file exist while it is still empty. Children poll
+ * RELEASE with `access()` alone and never read its contents, so this has never
+ * produced a wrong result here -- but the barrier is part of the same protocol,
+ * and leaving one side of it racy would preserve the exact hazard this file was
+ * written to detect.
+ */
+const publish = async (path: string, data: string) => {
+  const temporary = `${path}.${process.pid}.tmp`;
+  await writeFile(temporary, data, "utf8");
+  try {
+    await rename(temporary, path);
+  } catch (error) {
+    await unlink(temporary).catch(() => undefined);
+    throw error;
   }
 };
 
@@ -104,13 +147,32 @@ async function raceOpen(
     child.stdout?.resume();
   });
 
+  /**
+   * A child's result, but only once the payload is actually complete.
+   *
+   * Children publish with an atomic rename, so a partial read should be
+   * impossible. Treating one as "not yet published" anyway means a future
+   * regression surfaces as a timeout that carries the child's stderr, rather than
+   * an opaque "Unexpected end of JSON input" pointing at an arbitrary line. This
+   * changes only *when* a result counts as ready, never what is asserted.
+   */
+  const readOutcome = async (index: number): Promise<{ fatal?: string } | undefined> => {
+    const raw = await readFile(resultPath(index), "utf8").catch(() => undefined);
+    if (raw === undefined || raw.length === 0) return undefined;
+    try {
+      return JSON.parse(raw) as { fatal?: string };
+    } catch {
+      return undefined;
+    }
+  };
+
   try {
     await waitUntil(
       async () =>
         (
           await Promise.all(
             Array.from({ length: count }, async (_c, i) =>
-              (await exists(readyPath(i))) || (await exists(resultPath(i))),
+              (await exists(readyPath(i))) || (await readOutcome(i)) !== undefined,
             ),
           )
         ).every(Boolean),
@@ -127,14 +189,22 @@ async function raceOpen(
 
     const loserErrors: string[] = [];
     for (const index of losers) {
-      const outcome = JSON.parse(await readFile(resultPath(index), "utf8")) as { fatal?: string };
+      const outcome = await readOutcome(index);
+      if (!outcome)
+        throw new Error(
+          `Worker ${index} never published a complete result\n--- child stderr ---\n${stderr.join("")}`,
+        );
       loserErrors.push(String(outcome.fatal));
     }
 
     // Exactly one lock holder is expected, so releasing lets every loser finish.
-    await writeFile(releasePath, "go", "utf8");
+    await publish(releasePath, "go");
     for (const index of winners)
-      await waitUntil(() => exists(resultPath(index)), 30_000, `worker ${index} to finish`);
+      await waitUntil(
+        () => readOutcome(index).then(outcome => outcome !== undefined),
+        30_000,
+        `worker ${index} to finish`,
+      );
 
     return { winners: winners.length, losers: losers.length, loserErrors, stderr };
   } finally {
@@ -165,8 +235,15 @@ describe("kill journal single-writer enforcement across OS processes", () => {
       const intruder = track(new KillJournal(journalPath, false));
       await expect(intruder.initialize()).rejects.toMatchObject({ code: "EEXIST" });
 
-      await writeFile(releasePath, "go", "utf8");
-      await waitUntil(() => exists(resultPath), 30_000, `the holder to finish\n${childStderr}`);
+      await publish(releasePath, "go");
+      await waitUntil(async () => {
+        const raw = await readFile(resultPath, "utf8").catch(() => "");
+        try {
+          return raw.length > 0 && Boolean(JSON.parse(raw));
+        } catch {
+          return false;
+        }
+      }, 30_000, `the holder to finish\n${childStderr}`);
       const outcome = JSON.parse(await readFile(resultPath, "utf8")) as { engaged?: boolean };
       expect(outcome.engaged).toBe(true);
 

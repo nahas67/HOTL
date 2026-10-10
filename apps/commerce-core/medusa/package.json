@@ -3,12 +3,12 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "medusa develop",
-    "build": "medusa build",
-    "start": "medusa start",
-    "db:migrate": "medusa db:migrate",
-    "typecheck": "tsc --noEmit",
-    "test": "tsx --test test/*.test.ts"
+    "dev": "node ../../../scripts/medusa-run.mjs dev",
+    "build": "node ../../../scripts/medusa-run.mjs build",
+    "start": "node ../../../scripts/medusa-run.mjs start",
+    "db:migrate": "node ../../../scripts/medusa-run.mjs db:migrate",
+    "typecheck": "node ../../../scripts/medusa-run.mjs typecheck",
+    "test": "node ../../../scripts/medusa-run.mjs test"
   },
   "dependencies": {
     "@medusajs/cli": "2.20.1",

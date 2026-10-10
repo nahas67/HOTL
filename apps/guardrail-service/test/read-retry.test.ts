@@ -8,6 +8,16 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 // to the failure handler, so a reader colliding with a concurrent writer could report the ledger
 // as unreadable. This is an availability fault only -- state is never served from cache instead --
 // but on a OneDrive-backed Windows workspace it is a plausible real interruption.
+//
+// That retry is deliberately Windows-only, and symmetrically so with the write path: on POSIX
+// `rename` is atomic, so a reader observes either the old inode or the new one and EPERM means a
+// genuine permission fault that should surface immediately rather than be retried ten times.
+// These tests therefore assert the real contract per platform instead of assuming the Windows one.
+// This file was previously Windows-shaped only and failed on the Linux runners with
+// "expected 2 to be 0" -- a local-green/CI-red mismatch of exactly the kind this suite exists to
+// catch in production code.
+
+const RETRIES_TRANSIENT_READS = process.platform === 'win32';
 
 let transientFailures = 0;
 const realFs = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
@@ -54,10 +64,19 @@ describe('persisted read tolerates a transient Windows sharing collision', () =>
     const engine = await createEngine({ filePath });
     transientFailures = 2;
 
-    const state = await engine.snapshot();
-    expect(transientFailures, 'both transient failures should have been retried').toBe(0);
-    expect(state.orders).toEqual(expected.orders);
-    expect(state.audit.length).toBe(expected.audit.length);
+    if (RETRIES_TRANSIENT_READS) {
+      const state = await engine.snapshot();
+      expect(transientFailures, 'both transient failures should have been retried').toBe(0);
+      expect(state.orders).toEqual(expected.orders);
+      expect(state.audit.length).toBe(expected.audit.length);
+    } else {
+      // POSIX: an EPERM read is a real permission fault, not a sharing collision, so it is
+      // surfaced immediately. The state must still fail closed rather than be served from cache.
+      await expect(engine.snapshot()).rejects.toMatchObject({ code: 'EPERM' });
+      // Exactly one attempt was made. A retry loop would have consumed the second armed
+      // failure too; consuming only one is what proves the read was not retried here.
+      expect(transientFailures, 'a genuine permission fault is surfaced, not retried').toBe(1);
+    }
   });
 
   it('does not retry a genuine corruption, and never serves cached state instead', async () => {
@@ -84,6 +103,11 @@ describe('persisted read tolerates a transient Windows sharing collision', () =>
     // More failures than the retry budget: it must surface an error, not loop.
     transientFailures = 50;
     await expect(engine.snapshot()).rejects.toBeTruthy();
+    // Bounded means bounded: the budget is consumed and then the error is surfaced, so the
+    // 50 armed failures are never all spent spinning.
     expect(transientFailures).toBeGreaterThan(0);
+    expect(transientFailures).toBeLessThan(50);
+    // Off Windows the read is not retried at all, so exactly the one attempt is consumed.
+    if (!RETRIES_TRANSIENT_READS) expect(transientFailures, 'not retried off Windows').toBe(49);
   });
 });

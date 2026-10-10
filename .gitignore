@@ -1,5 +1,11 @@
 node_modules/
 .next/
+# The two other Next.js output locations. `.next/` above covers the default `distDir`, but a
+# package configured with `output: 'export'` writes to `out/` and a linked deployment writes local
+# build metadata to `.vercel/`. Neither may ever be tracked; scoping `out/` to apps/ keeps it from
+# swallowing an unrelated directory elsewhere in the tree.
+apps/*/out/
+.vercel/
 dist/
 .turbo/
 .env*

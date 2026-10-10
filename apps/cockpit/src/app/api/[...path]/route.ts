@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { configPatchSchema, constitutionPatchSchema, pilotApprovalRequestSchema, productCreateSchema, productUpdateSchema, refundSchema } from '@hotl/schemas';
 import { assertSameOrigin, integrationCreateSchema, integrationCredentialsSchema, integrationDisconnectSchema, integrationRevisionSchema, ownerHeaders, resolveSchema, simulationEnabled, upstream } from '@/lib/proxy';
 import { shopifyCookie, shopifyMutationSchema } from '@/lib/shopify-proxy';
+import { resumeNotice } from '@/lib/resume-notice';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -81,11 +82,29 @@ async function handle(request: Request, context: { params: Promise<{ path: strin
       if (result.ok) {
         const outcome = result.data as { resumedThreadId?: string; runId?: string; resumeRequired?: boolean };
         if (outcome.resumeRequired !== false && (outcome.resumedThreadId || outcome.runId)) {
+          const resumeId = outcome.runId ?? outcome.resumedThreadId!;
+          type UpstreamResult = Awaited<ReturnType<typeof upstream>>;
+          let resumed: UpstreamResult | undefined;
+          let unreachable: unknown;
           try {
-            const resumed = await upstream(orchestrator, `/api/runs/${encodeURIComponent(outcome.runId ?? outcome.resumedThreadId!)}/resume`, headers, 'POST', { interruptId: path[1] });
-            if (!resumed.ok) throw new Error('The agent could not resume.');
-          } catch {
-            result = { status: 202, ok: true, data: { ...outcome, warning: 'Decision saved. The agent has not resumed yet; retry resume from Activity after the orchestrator reconnects.' } };
+            resumed = await upstream(orchestrator, `/api/runs/${encodeURIComponent(resumeId)}/resume`, headers, 'POST', { interruptId: path[1] });
+          } catch (error) {
+            unreachable = error;
+          }
+          if (unreachable) {
+            // The orchestrator is genuinely unreachable. That IS worth retrying later, so say so.
+            console.warn('orchestrator resume unreachable', unreachable);
+            result = { status: 202, ok: true, data: { ...outcome, ...resumeNotice({}, resumeId) } };
+          } else if (resumed && !resumed.ok) {
+            // The orchestrator answered, and the answer was no. Do NOT tell the owner to retry a
+            // refusal that cannot change; see `resumeNotice` for why a 404 is permanent.
+            const detail = (resumed.data as { error?: { code?: string } })?.error;
+            console.warn('orchestrator declined resume', { runId: resumeId, status: resumed.status, code: detail?.code });
+            result = {
+              status: 202,
+              ok: true,
+              data: { ...outcome, ...resumeNotice({ status: resumed.status, code: detail?.code }, resumeId) },
+            };
           }
         }
       }

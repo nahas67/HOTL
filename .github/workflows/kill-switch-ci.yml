@@ -12,6 +12,16 @@ permissions:
 jobs:
   isolated:
     runs-on: ubuntu-latest
+    # Agent-tooling credentials must not reach a build process or an image layer. These names
+    # are forced empty for every step in this job. GITHUB_TOKEN is deliberately NOT blanked:
+    # actions/checkout uses it, it is already constrained to `contents: read` above, and it is
+    # not an agent-tooling credential. The image build additionally scrubs them with `env -u`.
+    env:
+      GITHUB_MCP_TOKEN: ''
+      MCP_TOKEN: ''
+      ANTHROPIC_API_KEY: ''
+      OPENAI_API_KEY: ''
+      DEEPSEEK_API_KEY: ''
     defaults:
       run:
         working-directory: infra/kill-switch
@@ -25,9 +35,79 @@ jobs:
       - run: npm ci --workspaces=false
       - run: npm run typecheck
       - run: npm test
-      - run: docker build -t hotl-kill-switch:validated .
-      - name: Export independently deployable artifact
-        run: docker save hotl-kill-switch:validated -o kill-switch-image.tar
+      # The image build is the check that has never actually executed on a runner (N7 in
+      # docs/FULL_PROGRAM_CHECKPOINT.md section 8), because the base image could not be pulled:
+      # auth.docker.io answered 429 Too Many Requests, then 504 Gateway Timeout, then
+      # context deadline exceeded. The base image is now pinned by digest from a mirror -- see
+      # the registry note at the top of the Dockerfile for the digest comparison proving it is
+      # the same image -- and the build runs through a bounded retry so a residual transient 5xx
+      # costs a delay instead of the job.
+      #
+      # Neither the build nor the export may be skipped, continue-on-error'd, or turned into an
+      # artifact upload of something that was never built.
+      - name: Build the kill-switch image and export the deployable artifact
+        run: |
+          set -euo pipefail
+
+          # Bounded retry with backoff. Three properties this wrapper must keep, asserted from
+          # test/independent-deployment.test.ts: at most $attempts tries with no unbounded loop;
+          # a retry can never turn a failure into a pass, because every non-success path returns
+          # the failing command's own exit code; and only registry/network transient output is
+          # retried, so a genuine build failure fails immediately.
+          attempts=3
+          base_sleep=15
+          transient='429 Too Many Requests|toomanyrequests|502 Bad Gateway|503 Service Unavailable|504 Gateway Timeout|context deadline exceeded|TLS handshake timeout|i/o timeout|connection reset by peer|failed to resolve reference|failed to (pull|resolve) image'
+          # Defects in this repository rather than conditions of the network. A shell parse error
+          # or a missing command can never be fixed by retrying, so they fail on the first attempt.
+          nontransient='syntax error|unexpected EOF while looking for matching|command not found'
+
+          run_container_check() {
+            local label="$1"; shift
+            local log attempt status backoff
+            log="${RUNNER_TEMP:-/tmp}/hotl-${label}.log"
+            mkdir -p "$(dirname "$log")"
+            attempt=1
+            while true; do
+              printf '\n[container-check] === %s: attempt %d of %d ===\n' "$label" "$attempt" "$attempts"
+              set +e
+              "$@" 2>&1 | tee "$log"
+              status="${PIPESTATUS[0]}"
+              set -e
+              if [[ "$status" -eq 0 ]]; then
+                printf '[container-check] %s: PASSED on attempt %d\n' "$label" "$attempt"
+                return 0
+              fi
+              if [[ "$attempt" -ge "$attempts" ]]; then
+                printf '[container-check] %s: FAILED after %d attempts (exit %d); not retrying further\n' "$label" "$attempt" "$status"
+                return "$status"
+              fi
+              if grep -Eqi "$nontransient" "$log"; then
+                printf '[container-check] %s: FAILED (exit %d) with a repository defect signature; failing without retry\n' "$label" "$status"
+                return "$status"
+              fi
+              if ! grep -Eqi "$transient" "$log"; then
+                printf '[container-check] %s: FAILED (exit %d) with no transient registry signature; failing without retry\n' "$label" "$status"
+                return "$status"
+              fi
+              backoff=$(( base_sleep * attempt ))
+              printf '[container-check] %s: transient registry/network error; retrying in %ds\n' "$label" "$backoff"
+              sleep "$backoff"
+              attempt=$(( attempt + 1 ))
+            done
+          }
+
+          # Defence in depth for the credential rule: the build is started with these variables
+          # removed from its environment, so even a self-hosted runner image or a parent process
+          # that exports one cannot hand it to the build. The Dockerfile declares no ARG or ENV
+          # that could carry a credential, and no build argument and no build secret is passed to
+          # the build here, so nothing can be baked into a layer.
+          run_container_check 'kill-switch-image-build' \
+            env -u GITHUB_MCP_TOKEN -u MCP_TOKEN -u GITHUB_TOKEN -u GH_TOKEN \
+                -u ANTHROPIC_API_KEY -u OPENAI_API_KEY -u DEEPSEEK_API_KEY \
+            docker build -t hotl-kill-switch:validated .
+
+          run_container_check 'kill-switch-image-export' \
+            docker save hotl-kill-switch:validated -o kill-switch-image.tar
       - uses: actions/upload-artifact@v4
         with:
           name: independent-kill-switch-image

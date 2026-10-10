@@ -15,6 +15,17 @@ container_id=''
 network_id=''
 ownership_label='hotl.runtime-drill'
 
+# Disposable drill image, pinned by digest. Same reasoning and same mirror as
+# infra/scripts/test-database.sh: GitHub-hosted runners are rate-limited against auth.docker.io,
+# and public.ecr.aws/docker/library/postgres is byte-identical to Docker Hub's official image.
+# `docker buildx imagetools inspect postgres:18-alpine` and
+# `docker buildx imagetools inspect public.ecr.aws/docker/library/postgres:18-alpine` both resolve
+# to sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873. CI uses this default
+# and must not override it; HOTL_DRILL_POSTGRES_IMAGE is for local debugging only.
+#
+# Do not "simplify" this back to postgres:18-alpine.
+postgres_image="${HOTL_DRILL_POSTGRES_IMAGE:-public.ecr.aws/docker/library/postgres:18-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873}"
+
 # Only resources carrying this invocation's UUID may be removed. In particular,
 # never remove a name that belonged to an existing container after a failed run.
 cleanup() {
@@ -47,13 +58,22 @@ trap 'exit 143' TERM
 # Trust authentication is for this disposable test only. Docker publishes its
 # randomly selected port exclusively on host loopback, never on 0.0.0.0.
 network_id="$(docker network create --label "${ownership_label}=${drill_id}" "$network_name")"
-container_id="$(docker create --name "$container_name" \
+# The command substitution below is deliberately NOT wrapped in double quotes.
+#
+# `container_id="$(docker create ... \` continuing across backslash-newlines and ending with a
+# quoted `"$var")"` does not parse: bash fails with "unexpected EOF while looking for matching
+# `"'" and the whole drill dies before it starts. Verified with `bash -n` against this exact
+# file; the same construct with the inner quotes replaced by `"${var}"` fails identically, so it
+# is the outer quote wrapping a multi-line `$(` that is at fault, not the variable expansion.
+# `docker create` prints only a container id, so there is nothing for word splitting to damage.
+# Do not "restore" the outer quotes.
+container_id=$(docker create --name "$container_name" \
   --label "${ownership_label}=${drill_id}" --network "$network_id" \
   --publish '127.0.0.1::5432' \
   --env POSTGRES_HOST_AUTH_METHOD=trust \
   --env POSTGRES_USER=hotl_runtime_drill \
   --env POSTGRES_DB=hotl_runtime_drill \
-  postgres:18-alpine)"
+  "$postgres_image")
 docker start "$container_id" >/dev/null
 
 wait_for_database() {

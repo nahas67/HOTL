@@ -131,7 +131,61 @@ export const constitutionFieldsSchema = z.object({
   advisory:z.record(z.string().max(2000)),
   pilot:pilotEnvelopeSchema.optional(),
 }).strict();
-export const constitutionSchema=constitutionFieldsSchema.extend({version:z.number().int().positive(),updatedAt:z.string().datetime()});
+/**
+ * Whether a configured autonomy domain actually governs anything.
+ *
+ * `autonomyDomains` is a twenty-slot policy surface. A slot is only an operating policy when the
+ * guardrail calls `autonomy(...)` with that domain at a decision point an agent can reach. A slot
+ * with no such call is a control that renders, persists and accepts a mode while changing no
+ * behaviour -- which is worse than an absent control, because the owner believes it is armed.
+ *
+ * This map is therefore the honest answer for all twenty domains, derived from the engine source
+ * rather than from the domain names. It changes only with code, never with configuration, which is
+ * why it is exposed as a build-time constant AND stamped onto the persisted Constitution by the
+ * engine: the owner reads the current truth, and no owner input can edit it.
+ */
+export const domainEnforcementSchema=z.object({
+  enforced:z.boolean(),
+  /** Engine operation that evaluates this domain, or `null` when nothing evaluates it. */
+  gate:z.string().max(120).nullable(),
+  /** Why the gate exists, or why no capability does. Owner-facing. */
+  basis:z.string().trim().min(3).max(500),
+}).strict();
+export type DomainEnforcement=z.infer<typeof domainEnforcementSchema>;
+export const autonomyDomainEnforcement:Readonly<Record<AutonomyDomain,DomainEnforcement>>=Object.freeze({
+  sourcing:{enforced:false,gate:null,basis:'No sourcing operation exists. The sourcing agent reads the saved catalog snapshot and its only mutation is listing publication, which is governed by catalog and pricing.'},
+  supplier_contact:{enforced:false,gate:null,basis:'No supplier communication capability exists. Nothing in the platform sends, receives, or drafts supplier correspondence.'},
+  catalog:{enforced:true,gate:'listing.publish',basis:'Publishing a listing is a public mutation; catalog mode governs it and pricing mode joins when the price changes.'},
+  pricing:{enforced:true,gate:'listing.publish',basis:'A listing published at a new price is a price change; pricing mode governs it alongside catalog.'},
+  promotions:{enforced:false,gate:null,basis:'No discount, promotion, or coupon capability exists. Campaign launch is advertising spend, not a promotion.'},
+  advertising:{enforced:true,gate:'spend.check | campaign.launch | campaign.pause | spend.commit',basis:'Campaign budget reservation, launch, pause, and spend commitment are all advertising decisions.'},
+  content:{enforced:false,gate:null,basis:'No content mutation exists. Marketing drafts copy locally and it is never published to a channel, so no content decision is ever authorized.'},
+  influencers:{enforced:false,gate:null,basis:'No influencer capability exists.'},
+  seo:{enforced:false,gate:null,basis:'No search or indexing capability exists.'},
+  email:{enforced:false,gate:null,basis:'No email send capability exists. No lifecycle or campaign mail is dispatched.'},
+  sms:{enforced:false,gate:null,basis:'No SMS send capability exists.'},
+  support:{enforced:false,gate:null,basis:'The support agent has exactly one mutation and it is a refund, already governed by refunds. No ticket, case, or customer-communication operation exists to govern.'},
+  refunds:{enforced:true,gate:'refunds.evaluate',basis:'Refund evaluation moves money and is governed by refunds, including the escrow threshold above which an owner must approve.'},
+  orders:{enforced:true,gate:'commerce.checkout | commerce.event',basis:'An agent checkout creates a commerce order and decrements stock, and an agent commerce event moves that order between payment and fulfillment states.'},
+  fulfillment:{enforced:true,gate:'supplier.order | commerce.event',basis:'Placing a supplier order against an order line is a fulfillment decision, and recording fulfillment.updated ships the order.'},
+  purchasing:{enforced:true,gate:'supplier.order',basis:'A supplier purchase order commits spend and is bounded by maxSupplierPurchase.'},
+  inventory:{enforced:true,gate:'commerce.checkout',basis:'An agent checkout is the only agent-reachable mutation of product stock, order counts, and revenue; inventory mode governs it.'},
+  finance:{enforced:true,gate:'commerce.event',basis:'A payment.confirmed or payment.failed transition decides whether an order holds captured money and whether it stays refundable; finance mode governs it.'},
+  marketplaces:{enforced:false,gate:null,basis:'A channel integration capability exists (Shopify and WooCommerce connection plus read-only sync) but it is owner-only and read-only, so no agent can reach it and no autonomy mode can change its behaviour.'},
+  experimentation:{enforced:false,gate:null,basis:'No experiment, variant, or A/B capability exists.'},
+});
+export const enforcedAutonomyDomains=autonomyDomains.filter(domain=>autonomyDomainEnforcement[domain].enforced);
+export function domainEnforcementReport():{domain:AutonomyDomain;enforced:boolean;gate:string|null;basis:string}[] {
+  return autonomyDomains.map(domain=>({domain,...autonomyDomainEnforcement[domain]}));
+}
+export const constitutionSchema=constitutionFieldsSchema.extend({
+  version:z.number().int().positive(),updatedAt:z.string().datetime(),
+  // Optional so a ledger persisted before this field existed keeps validating against this schema
+  // (AGENTS.md rule 7). It is absent only from `constitutionPatchSchema`, which derives from
+  // `constitutionFieldsSchema`, so an owner cannot supply or edit it; the engine stamps the current
+  // build's truth onto every constitution it reads and persists it on the next owner write.
+  domainEnforcement:z.object(Object.fromEntries(autonomyDomains.map(d=>[d,domainEnforcementSchema])) as Record<AutonomyDomain,typeof domainEnforcementSchema>).optional(),
+});
 export const constitutionPatchSchema=constitutionFieldsSchema.partial().omit({domains:true,pilot:true}).extend({
   expectedVersion:z.number().int().positive(),reason:z.string().trim().min(3).max(1000),
   pilotDraft:pilotDraftSchema.optional(),

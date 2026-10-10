@@ -42,11 +42,13 @@ export function ProductEditor({
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [errorCode, setErrorCode] = useState("");
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (!policy.data) return;
     setBusy(true);
     setError("");
+    setErrorCode("");
     try {
       const context = {
         expectedConstitutionVersion: policy.data.constitution.version,
@@ -78,6 +80,14 @@ export function ProductEditor({
         error instanceof Error
           ? error.message
           : "The product could not be saved.",
+      );
+      // The guardrail's reason code, not its English sentence. `RESOURCE_CHANGED` is a
+      // concurrent edit and the owner should reopen the product; `CONSTITUTION_CHANGED` means
+      // the policy moved underneath the form, which reopening will not fix.
+      setErrorCode(
+        error instanceof Error && typeof (error as unknown as { code?: unknown }).code === "string"
+          ? (error as unknown as { code: string }).code
+          : "",
       );
     } finally {
       setBusy(false);
@@ -213,8 +223,14 @@ export function ProductEditor({
         </label>
         {error && (
           <Notice error>
-            {error} Your input is preserved. Close and reopen this product to
-            review its latest version after a conflict.
+            {error} Your input is preserved.
+            {/* Keyed on the guardrail's reason code, not on the message text. The proxy
+                emits "…changed after this form or proposal…" for BOTH RESOURCE_CHANGED and
+                CONSTITUTION_CHANGED, so a substring match told the owner a concurrent edit
+                had caused a plain policy denial. Only RESOURCE_CHANGED is fixed by reopening
+                the product; a stale Constitution needs the policy reviewed, not the form. */}
+            {errorCode === "RESOURCE_CHANGED" &&
+              " Close and reopen this product to review its latest version after a conflict."}
           </Notice>
         )}
       </div>

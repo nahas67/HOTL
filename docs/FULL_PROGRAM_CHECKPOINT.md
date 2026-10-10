@@ -1,10 +1,12 @@
 # HOTL — Full Program Checkpoint and Evidence Register
 
 **Prepared:** 2026-10-08 (supersedes the October 1 snapshot anchored at `8ccf7b5`)
+**Last reconciled:** 2026-10-10 — see **§8**. Every claim in §0–§7 below was written against an older `main`; §8 records which of them the live repository has since overtaken.
 **Repository:** https://github.com/nahas67/HOTL
 **Base branch/head at review:** `main` @ `1de2ad36793258db201aac21f04fdd48d4a0681f`
+**Current `main` (verified live 2026-10-10):** `13a74aa8281739381cf9d085fe29218e0343a980` — **44 commits ahead of the October 1 snapshot**, and `main` was **RED** at that SHA.
 **Prior checkpoint preserved at:** [`docs/checkpoints/HOTL_FULL_CHECKPOINT_2026-10-08_ORIGINAL.md`](checkpoints/HOTL_FULL_CHECKPOINT_2026-10-08_ORIGINAL.md) — SHA-256 `ba2bac52…c852e2`, byte-identical to the copy supplied with this session.
-**Prior audit superseded:** [`docs/MASTER_CHECKPOINT_2026-10-08.md`](MASTER_CHECKPOINT_2026-10-08.md) (branch `audit/hotl-checkpoint-2026-10-08`, open PR #1).
+**Prior audit superseded:** [`docs/MASTER_CHECKPOINT_2026-10-08.md`](MASTER_CHECKPOINT_2026-10-08.md) (branch `audit/hotl-checkpoint-2026-10-08`, PR #1, **closed unmerged 2026-10-08**).
 
 **This is an evidence register, not a production authorization.** Nothing here promotes a gate. No simulated result is provider proof.
 
@@ -1095,3 +1097,437 @@ For every `[ ]` → `[x]`, record **commit SHA + exact command and result + prov
 - [`evidence/gate-a-c-staging-provisioning-2026-10-01/README.md`](../evidence/gate-a-c-staging-provisioning-2026-10-01/README.md) and [`PREFLIGHT.json`](../evidence/gate-a-c-staging-provisioning-2026-10-01/PREFLIGHT.json) — 19 missing settings
 - [`evidence/gate-c-shopify-external-2026-09-28/README.md`](../evidence/gate-c-shopify-external-2026-09-28/README.md) — external BLOCKED
 - [`docs/checkpoints/HOTL_FULL_CHECKPOINT_2026-10-08_ORIGINAL.md`](checkpoints/HOTL_FULL_CHECKPOINT_2026-10-08_ORIGINAL.md) — preserved October 1 snapshot
+
+---
+
+# 8. Reconciliation and repair — 2026-10-10
+
+This section was added by a fresh reconciliation session. It **supersedes §0–§7 wherever they conflict**, and leaves every other gate untouched.
+
+## 8.1 CP-00C — remote freshness. CLOSED.
+
+The prior sessions could not reach GitHub and anchored everything at `8ccf7b5` (Oct 1) or `1de2ad3` (Oct 8). Live state was retrieved this session through the GitHub API and `gh`. Every headline claim in the supplied 2026-10-10 audit documents was **stale**.
+
+| Claim in the 2026-10-10 audit docs | Actual, verified 2026-10-10 |
+| --- | --- |
+| `main` at `1de2ad3` | `main` at **`13a74aa`**, **44 commits** past the Oct 1 snapshot |
+| PR #1 open | PR #1 **closed unmerged** 2026-10-08 |
+| CI red at `1de2ad3`, fix never delivered | CI **green** at `47f1032` via **PR #3** (merged), then **red again** at `13a74aa` |
+| 26 Postgres cases skipped, Docker unavailable | **Docker 29.5.3 is available on this machine**; both SQL drills and the Postgres suite run for real (§8.3) |
+| `sites/` absent from the archive | `sites/` present and tracked |
+| Browser drill 11/11 | **20/20** — settings, responsive, ARIA and audit-integrity specs added since |
+
+**Live `main` was red.** Runs [37981663106](https://github.com/nahas67/HOTL/actions/runs/37981663106) (`Main platform checks`) and [37981663015](https://github.com/nahas67/HOTL/actions/runs/37981663015) (`Isolated kill-switch checks and image`) both **failed** at `13a74aa`. Last green was `47f1032`. Twenty commits landed on a red default branch.
+
+## 8.2 CP-02 — three defects, not one
+
+All three are the **same class** this repository has now hit repeatedly: *a green local run is not evidence of a green runner*. PR #3 fixed the first two instances (a Playwright strict-mode locator, and a `pg_isready` gate that reported ready before the database existed). This session found the third and fourth.
+
+### D-A — Kill-switch journal race (the one CI reported) · FIXED · `4d1d9ff`
+
+`infra/kill-switch/test/journal-multiprocess.test.ts:130` called `exists()` on a child's result file and then `JSON.parse()`d it. `fs.writeFile` creates the path **before** flushing the payload, so a 20 ms poll can land inside that window and parse an empty buffer:
+
+```
+SyntaxError: Unexpected end of JSON input
+ ❯ raceOpen test/journal-multiprocess.test.ts:130:28
+```
+
+**Not** fixed by relaxing the assertion. Children now publish via write-temp + `rename()`, atomic on POSIX and Windows, so the reader only ever observes a complete file. Reproduced deterministically before fixing — see §8.5.
+
+### D-B — Guardrail ledger lock release · REAL CORRECTNESS DEFECT · FIXED · `4d1d9ff`
+
+Found by forcing the turbo cache to miss, **not** by CI. The cross-process drill failed with:
+
+```
+ENOENT: no such file or directory, unlink '...\state.json.lock'
+```
+
+`GuardrailEngine.transaction`'s `finally` unlinked `lockPath` with **no ownership check**. Stale-lock recovery (§0.7.8, D2) can delete a lock whose recorded owner is momentarily unreadable or gone; two processes can then each `open(...,'wx')` successfully and both believe they hold the lock. The faster one deletes the slower one's lock on the way out, and the slower one throws. The release is now conditional on the recorded pid **still being ours**.
+
+This sits directly on the daily-spend ceiling. **The financial invariant itself was never observed violated** — the drill aborts at the child-failure assertion before the ceiling assertions run — but an unowned delete on a mutual-exclusion primitive is not acceptable regardless, and the fix is strictly a tightening: a released lock is now only removed if it is provably ours.
+
+### D-C — PowerShell drill scripts could never pass on Windows · FIXED · `4d1d9ff`
+
+`Start-Process -PassThru` returns a `Process` whose handle Windows PowerShell 5.1 never opens, so `.ExitCode` is `$null` after exit — and `$null -ne 0` is **true**. A run that had already produced the correct result was reported as `pg_ctl failed ()` / `Concurrent reservation process failed`. Reading `.Handle` once after start caches it. Both `test-database.ps1` and `test-runtime-ledger.ps1` now pass.
+
+The drill was never wrong. `race-a` allowed $60 and `race-b` was **denied** `DAILY_CEILING_EXCEEDED` with $40 remaining — the concurrent ceiling held exactly.
+
+## 8.2.1 Five further defects, unmasked one after another · `3147a97` … `faeceec`
+
+Fixing D-A and D-B let the pipeline advance far enough to expose **five** more failures that had been hidden behind them, each revealed only after the previous one was cleared. None is a production safety fault. All are cases of a guarantee being **unverifiable where it actually runs** — or, in one case, never having run at all.
+
+### D-D — The cross-process drill never ran in the workflow built to validate it · FIXED
+
+`.github/workflows/kill-switch-ci.yml` installs the kill-switch **in isolation** — `npm ci --workspaces=false` with `working-directory: infra/kill-switch` — deliberately, so the emergency plane can never silently depend on the main application's dependency tree. Both multiprocess drills hardcoded the **pnpm workspace** path `<repo>/node_modules/tsx/dist/loader.mjs`, which does not exist in that layout. Every child process died instantly on an unresolvable `--import`, and the tests failed on a 30 s timeout having exercised nothing:
+
+```
+Timed out after 30000ms waiting for the holder to acquire the lock
+Timed out after 30000ms waiting for every child to resolve its open attempt
+```
+
+**So the cross-process single-writer guard — the proof that the independent emergency journal cannot fork into two writers — has never executed in the workflow built to validate it.** Both `tsx` locations are now probed, with a loud failure if neither resolves rather than a silent timeout. The isolation itself is correct and is preserved; only the path assumption was wrong. The same latent fix is applied to the guardrail ledger drill.
+
+### D-E — A Windows-only contract asserted on every platform · FIXED (two instances)
+
+`readPersisted()` in the guardrail engine and `replaceWithRetry()` in the orchestrator checkpointer both retry `EPERM/EACCES/EBUSY` **only when `process.platform === 'win32'`**. **That gate is correct** and is deliberately symmetric with the ledger write path: on POSIX `rename` is atomic, so a reader observes either the old inode or the new one, and an `EPERM` there is a genuine permission fault that should surface immediately rather than be retried ten times.
+
+Both tests injected a Windows error code and expected the Windows behaviour everywhere, so they failed on the Linux runners. **Production code is unchanged.** Each now asserts the real per-platform contract — retry and return real state on Windows; fail closed with `EPERM`, never serve cache or half-persist, elsewhere — and both still prove retries stay bounded and are never fully spent.
+
+> The first version of this fix asserted that *no* failure is consumed off Windows. The runner showed the engine consumes exactly one, because `snapshot()` still makes one attempt and `checkMissingState` rethrows a non-`ENOENT` error without re-reading. The assertion was wrong about the engine, not about the platform, and was corrected against the source rather than the symptom.
+
+### D-F — The owner-console Site was tested against unproven output · FIXED
+
+`Owner console site tests` ran `npm test` in a fresh checkout, but the tests assert on **built** output — one is literally *"build emits every local asset referenced by the page"* — and `dist/` is git-ignored:
+
+```
+not ok 5 - build emits every local asset referenced by the page
+error: "ENOENT: no such file or directory, open '.../sites/hotl-owner-console/dist/index.html'"
+```
+
+Locally it passed only because a developer had already run the build. The step now builds first and then tests, which is the check working as intended and additionally makes CI prove the build succeeds on a clean tree. Verified from a deleted `dist/`: **5 pass, 0 fail**.
+
+### The class, stated plainly
+
+This is now the **sixth** instance of one pattern, and the repository keeps producing the counterexample:
+
+| # | Defect | Green locally? |
+| --- | --- | --- |
+| 1 | Playwright strict-mode locator (PR #3) | yes |
+| 2 | `pg_isready` gate before the database exists (PR #3) | yes |
+| 3 | IPC file existence-vs-completeness (D-A) | yes |
+| 4 | Install-layout assumption for the child loader (D-D) | yes |
+| 5 | Windows-only retry contract asserted on POSIX (D-E) | yes |
+| 6 | Test asserting on a build artifact never built in CI (D-F) | yes |
+
+**A green local run is not evidence of a green runner.** Any future checkpoint that records local-only evidence for a concurrency, platform or packaging property should be treated as unverified until a runner has confirmed it.
+
+### Registry resolution — verified equivalent sources · prepared 2026-10-10
+
+`auth.docker.io` answers normally from an ordinary machine, so this is rate-limiting/outage specific to the shared GitHub runner IP pool, not a global registry outage. Three replacements were pulled and **compared by digest**, so equivalence is proven rather than assumed:
+
+| Image in use | Replacement | Digest (identical in both registries) |
+| --- | --- | --- |
+| `node:22-alpine` | `public.ecr.aws/docker/library/node:22-alpine` | `sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402` |
+| `postgres:16-alpine` | `public.ecr.aws/docker/library/postgres:16-alpine` | `sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea` |
+| `zricethezav/gitleaks:v8.28.0` | `ghcr.io/gitleaks/gitleaks:v8.28.0` | `sha256:cdbb7c955abce02001a9f6c9f602fb195b7fadc1e812065883f695d1eeaba854` |
+
+AWS ECR Public serves the Docker **official library** images and is not subject to the same anonymous-pull limit. `gitleaks` is a third-party image and is **not** on ECR Public, but the gitleaks project publishes the identical image to `ghcr.io`, which runners reach without Docker Hub. Pinning by digest makes the build deterministic and prevents it drifting back to Docker Hub on a later "simplification".
+
+Both PostgreSQL drills, the credential scan, the real cross-process kill-switch tests and the image build **stay in place**. Any retry is bounded and can never convert a failure into a pass.
+
+### D-G — the runtime-ledger drill could not parse · FIXED
+
+Run `38006425415` failed with `test-runtime-ledger.sh: line 137: unexpected EOF while looking for matching `"'`. Localised with `bash -n` against the blob at each ref: `47f1032` parses, the pinned `HEAD` did not, and reverting the single `docker create` line made it parse again. The cause is the shape `container_id="$(docker create … \` across backslash-newlines, ending in a quoted `"$var")"`, which bash rejects; substituting `"${var}"` fails identically, so it is the **outer quoting of a multi-line `$(`**, not the expansion. The outer quotes are removed and the reason is recorded in the file so they are not restored. `bash -n` now exits 0 for both drill scripts.
+
+This is the **seventh** instance of the local-green pattern: the file passes every Windows check and fails only when bash actually parses it. No Windows check in this repository parses a shell script.
+
+### D-H — the retry classifier called a code defect "transient" · FIXED
+
+`unexpected EOF` sat in the transient signature list, so the D-G parse error was retried twice, burning 45 s before failing on a cause retrying could never fix. A `nontransient` guard now runs **before** the transient guard, and the bare pattern was removed from `transient`. Applied to both workflows.
+
+Verified by **executing** the function extracted from the workflow — text assertions only prove the source says the right thing, not that it does. Each scenario runs in its own process so the function's internal `set -e` cannot leak:
+
+| Scenario | Required | Observed |
+| --- | --- | --- |
+| genuine failure | exit 42, **one** attempt | exit 42, 1 attempt |
+| transient then success | pass on attempt 2 | pass, attempt 2 |
+| never-recovering transient | exit 7, exactly 3 attempts | exit 7, 3 attempts |
+| repository defect | exit 2, **one** attempt | exit 2, 1 attempt |
+| defect **and** transient string present | defect wins | 1 attempt |
+
+**10/10 assertions pass.** `independent-deployment.test.ts` now asserts all three propagation paths, the defect guard, its precedence over the transient guard, and that `unexpected EOF` is absent from the transient list.
+
+### Result at `87beb0e`
+
+`Isolated kill-switch checks and image` is **GREEN for the first time**: the image build, artifact export and the real cross-process single-writer drill all executed. `Main platform checks` has **every code-level step green**, and `migration-and-rls-drill` **passed on attempt 1**, proving the ECR mirror works end to end. Only `runtime-ledger-drill` failed, on D-G above.
+
+### Credential exposure — root cause found · `docs/credential-exposure-status-2026-10-10.md`
+
+An independent audit reached a conclusion the 2026-10-08 review did not. `turbo.json` declares no `env`, so Turbo runs in strict mode — which **looks** protective and is not. Probed against turbo 2.10.12: strict mode still passes through **every `GITHUB_*` variable**, all `NEXT_*`, `NODE_OPTIONS`, `CI`, `TURBO_*` and `VERCEL_*`, while filtering `MCP_TOKEN`, the model API keys and `SUPABASE_SERVICE_ROLE_KEY`. `GITHUB_MCP_TOKEN` is `GITHUB_*`-prefixed, so it reached `next build` and Turbopack's filesystem cache serialised it. **A credential not named `GITHUB_*` would never have been exposed this way.**
+
+- `pnpm dev` **is** protected — `scripts/dev.mjs` spawns services through the `environmentFor()` allowlist in `scripts/dev-env.mjs`, which contains no `GITHUB_MCP_TOKEN`. That is why the live dev cache scans clean.
+- `pnpm build`, `turbo run test` and a direct `next build` are **not**. Deleting the cache is therefore not a durable control. Declaring the variable in `turbo.json` `env` will **not** fix it — strict mode forces the passthrough, so the scrub must happen before Turbo spawns. `[ ]` 🚨 **N9**
+- The browser bundle contains **only** `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY`, both browser-public by design. `SUPABASE_SERVICE_ROLE_KEY` is absent from every file in every cache. One client chunk contains the **names** of secret-bearing settings (`SHOPIFY_CLIENT_SECRET`, `AGENT_JWT_KEYS`, `DATABASE_URL`) with **zero** assignments — labels, not values.
+- CI hardening verified independently: both workflows parse as valid YAML, the five variables are **true empty strings** rather than merely absent, no step-level override can bypass it, `GITHUB_TOKEN` is correctly left alone for checkout, and zero `--build-arg`/`--secret` exist anywhere in the repository.
+- 🆕 gitleaks ran with the repository mounted **read-write**. It only reads, so `-v "$PWD:/repo:ro"` is a free reduction in blast radius. Applied.
+- 🚨 **Owner action outstanding and not verifiable from this repository:** revoke the exposed fine-grained PAT and scope the replacement to repository read plus issues/PR only. No rotation evidence exists anywhere.
+
+## 8.3 Verification — forced, uncached, this machine
+
+`scripts/verify-suite.ps1` forces typecheck and the turbo tests so a cache hit can never be presented as evidence.
+
+| Step | Command | Result |
+| --- | --- | --- |
+| Lint | `pnpm lint` | **PASS** (exit 0) |
+| Typecheck | `pnpm exec turbo run typecheck --force` | **PASS** — 11/11 |
+| Workspace tests | `pnpm exec turbo run test --concurrency=2 --force` | **PASS** — 11/11 tasks |
+| Root tests | `node --test tests/*.test.mjs` | **PASS** — 22 |
+| Build | `pnpm build` | **PASS** (exit 0) |
+| Browser drill | `pnpm test:e2e` | **PASS** — **20/20** |
+| Migration + RLS drill | `infra/scripts/test-database.ps1` | **PASS** — `[OK] … concurrent spend tests passed` |
+| Runtime-ledger drill | `infra/scripts/test-runtime-ledger.ps1` | **PASS** — state/audit MD5 `804c6f52…` identical before restart, after restart, and after restore into a separate database; backup SHA-256 unchanged |
+
+Per-package, uncached: guardrail-service **321 passed / 26 skipped (347)**, cockpit 35, orchestrator 50, kill-switch **24** (was 23/1 failing), connector-sdk 49, commerce-core 17, storefront 7.
+
+## 8.4 Guard strength was tested, not assumed
+
+A fix that makes CI green by weakening an assertion is not a fix.
+
+- Mutating the kill journal's lock from exclusive create (`'wx'` → `'w'`) makes **all 3** multiprocess guards fail: `expected 3 to be 1`. Restored byte-identical afterwards; `git status` confirms `src/journal.ts` is unmodified.
+- The ledger ceiling drill still passes with the ownership check in place.
+- `lock-recovery.test.ts` gains **4** tests pinning the release rule: deletes a lock it owns, **leaves** a lock another owner has taken over, does not throw when the lock is already gone, and a transaction still commits normally.
+- The typechecker caught a defect introduced *during this work* — a `return` inside a `finally` block discards the `try` block's value, silently turning every transaction result into `undefined`. Fixed, and the reason is recorded in the code so it is not repeated.
+
+## 8.5 Reproduction artefacts
+
+The IPC defect was reproduced **deterministically** rather than won on a timing lottery, because a flake that only appears on a slow runner cannot be distinguished from a coincidence. A standalone probe showed `exists()` → `true`, `readFile().length` → `0`, `JSON.parse` → `SyntaxError: Unexpected end of JSON input` — byte-identical to the CI failure.
+
+## 8.6 Newly discovered gaps · 🆕
+
+| # | Gap | Status |
+| --- | --- | --- |
+| N1 | **The 19 staged settings have never been recomputed** against a real environment. §"The 19 staged static settings still missing" describes a recorded local shell, not a provisioned staging host. | `[ ]` 🚨 |
+| N2 | **Docker is available on this machine**, so the long-standing "Postgres unverifiable" limitation no longer applies. Every future checkpoint may claim real Postgres evidence rather than "skipped". | Adopted this session |
+| N3 | **The PS1 drill scripts had never passed on any machine.** They had been reported as passing on 2026-10-08, which could only have been the `.sh` scripts on Linux. The Windows path was silently unverified. | Fixed |
+| N4 | **In-process concurrency tests cannot model cross-process locks.** The repo now has genuine multi-OS-process drills for the ledger and the kill journal; other concurrency claims remain in-process only and should not be read as cross-process proof. | `[ ]` |
+| N5 | **PR #2 is redundant** (superseded by PR #3) and **PR #4 is docs-only and still open**. Both await an owner decision. | `[ ]` 🚨 owner |
+| N6 | **Docker Hub is unreachable from the GitHub runners.** Every container step fails while authenticating: `429 Too Many Requests`, then `504 Gateway Timeout`, then `context deadline exceeded` against `auth.docker.io`. This blocks the kill-switch image build, both Postgres drills and the gitleaks scan. **It is external infrastructure, not a defect**, and the same drills pass on this machine. The steps were deliberately **left in place** — removing them would drop the checks the workflows exist to perform. | `[ ]` 🚨 external — resolution prepared, §8.2.1 "Registry resolution" |
+| N7 | **The kill-switch image has therefore never actually been built by CI.** `independent-deployment.test.ts` asserts the workflow *contains* a build step; that assertion passed while the build itself was failing. A workflow that asserts on its own configuration is not the same as the configuration working. | `[ ]` 🚨 |
+| N8 | **The gitleaks scan has not run** since these repairs landed, because it is a `docker run` step. The exposed PAT named in D1 must still be treated as disclosed regardless. | `[ ]` 🚨 |
+
+## 8.7 Gates — unchanged
+
+**No gate moved.** Gate A remains owner-unapproved, Gate B externally blocked, Gate C has **zero** external provider evidence. The 19 missing staging settings stand. Nothing in §8 converts a local result into provider proof.
+
+## 8.8 Status at the end of this session
+
+| Item | State |
+| --- | --- |
+| `main` | **`13a74aa` — still RED.** Unchanged by this session; it needs PR #5 to land. |
+| Repair branch | `codex/cp02-ci-red-2026-10-10` @ **`cf409ed`**, pushed, 10 commits ahead of `main`, 0 behind |
+| PR | **#5** — `MERGEABLE`, both required checks **SUCCESS**, `mergeStateStatus: BLOCKED` |
+| Branch protection | `main` requires `validate` **and 1 approving review**, `strict: true` |
+| Gates A / B / C | **Unchanged. Blocked.** |
+| Local evidence | All six release steps green, uncached, plus both SQL drills |
+
+### Remote status on `cf409ed` — **every check green**
+
+| Workflow | Result |
+| --- | --- |
+| `Isolated kill-switch checks and image` | **SUCCESS** |
+| `Main platform checks` | **SUCCESS** |
+
+Within `Main platform checks`: `pnpm lint`, `pnpm typecheck`, `pnpm test`, the guarded Medusa bridge, the owner-console Site tests, `pnpm build`, the **20/20** browser drill, and the **container checks** — the migration/RLS drill, the runtime-ledger drill and the credential scan — all **PASS**.
+
+Within the kill-switch workflow: `npm ci`, typecheck, `npm test`, **the image build**, and the artifact export all **PASS**.
+
+**This is the first time in this repository's history that all of the following have executed on a real runner:** the kill-switch image build (N7), the artifact export, the cross-process single-writer drill in the workflow built to validate it (D-D), both PostgreSQL drills, and the gitleaks credential scan (N8).
+
+### The one thing that remains, and it is correctly not mine
+
+`mergeStateStatus: BLOCKED` with `validate: SUCCESS` and `MERGEABLE` is **not** a CI problem. `main` requires **`required_approving_review_count: 1`**. Only the owner can supply that review, and **no agent may self-approve or grant it on the owner's behalf**. The branch is 10 commits ahead and 0 behind, so `strict: true` is satisfied.
+
+**CP-02 is therefore code-complete and remotely verified, with the final merge held for owner review authority.** Nothing was removed from the pipeline to reach green: both PostgreSQL drills, the credential scan, the real cross-process tests and the kill-switch image build all ran and all passed.
+
+## 8.8b CP-03B — cockpit route, control and vertical Settings inventory
+
+Delivered in [`docs/cockpit-route-and-settings-inventory.md`](cockpit-route-and-settings-inventory.md). Every route was visited in a real browser; nothing was classified from source alone and presented as observed.
+
+**Coverage.** 11/11 routes, 9/9 Settings panels. Of ~120 inventoried controls, **~45 were actually clicked and observed** and ~75 are explicitly labelled `SOURCE`/`UNVERIFIED`. Routes: WORKING 8, READ-ONLY 1, SIMULATED 1, PARTIAL 1. Settings: 3 panels WRITE-capable, 6 READ-ONLY. Settings has only **5 write controls out of 38** — a deliberate design choice recorded in `settings-page.tsx`, not an inventory gap, and not to be misread as missing functionality.
+
+**On the prior inventory** ([`docs/cockpit-control-inventory.md`](cockpit-control-inventory.md)): honest and well-disciplined, but **it has no Settings row at all** despite `NAV` listing 11 sections; **9 of its findings are now fixed** and were confirmed fixed in-browser; and it **claims a regression suite (`tests/e2e/control-inventory.spec.ts`) that does not exist in the tree**. Its coverage claims are therefore unbacked and are not credited.
+
+### Four defects found
+
+| # | Sev | Finding | State |
+| --- | --- | --- | --- |
+| B-1 | ~~HIGH~~ **→ local state, not a product defect** | `infra/kill-switch/data/events.jsonl` is 0 bytes, so `journal.ts` correctly refuses it (`Empty kill journal: manual recovery required`) and `pnpm dev` cannot start. | **Reclassified.** `git ls-files infra/kill-switch/data/` is empty and `.gitignore:8` ignores `data/`, so **a fresh clone has no such file and never reaches this path** — `initialize()` creates the journal and writes its `initialized` sentinel. The audit's "a fresh clone cannot run the product" conclusion is **wrong**. This is one machine's corrupted local artifact. The audit was right not to reset it: it is a preserved emergency artefact, and Rule 7 plus the runbook make recovery an owner decision. `[ ]` 🚨 owner |
+| B-2 | LOW | Audit-chain verdict row sits flush against its panel border (`cockpit.tsx` `.metric-context` inside `.panel`: panel padding 0 + `overflow: hidden`). Measured 1 px from left and bottom where the heading is inset 23 px. Renders clipped. | `[ ]` |
+| B-3 | **MEDIUM** | **Approval → orchestrator resume fails every time**, reproduced twice with the orchestrator healthy on :4300 and `POST /api/runs` returning 201 in the same session. The decision **is** durably saved and `route.ts:88` returns 202 non-destructively, so it **fails safe** — but the run never auto-resumes, and the "Retry resume from Activity" banner the toast promises does not render. | `[ ]` 🚨 see below |
+| B-4 | LOW | An unknown route silently renders Overview (`page.tsx:5`, no runtime guard). | `[ ]` |
+
+**B-3 is the one that matters**, and the diagnosis has been narrowed by reading the code rather than by inference — but it is **not yet closed**, because doing so requires reproducing it in a browser, which this session did not complete.
+
+What is **proven** from the source:
+
+- Interrupts are created **only** by a genuine policy escalation (`engine.ts:595`); there are **no seeded demo interrupts** in the guardrail. So an item in Approvals is not a placeholder.
+- `state.interrupts` is persisted in full and returned in every snapshot; entries are only removed by resolution or by Constitution-change expiry (`engine.ts:823`). **A pending approval from an earlier run therefore stays listed and resolvable after that run's graph checkpoint is gone.**
+- `manager.resume` correctly refuses such a run: `manager.ts:95-96` throws `404 "This run has no saved checkpoint."` — added deliberately, per the comment, to stop a fabricated "resolved, seeded" success (rule 7).
+- The cockpit's proxy **forwards the `Idempotency-Key`** when the browser sends one (`route.ts:20-22` → `proxy.ts:60`), so the header requirement at `app.ts:74` is satisfied on the normal path. The audit's leading hypothesis is therefore **not** supported.
+- `tests/e2e/platform.spec.ts:78` — "a cockpit cycle pauses in LangGraph and resumes after a saved owner decision" — **passes in CI**, so resume works end to end for a run started in the same session.
+
+The remaining, strongly supported explanation: the audit resolved a **stale approval from a previous run**, whose resume correctly 404s. What is genuinely defective is the **presentation and diagnosability**, not the guard:
+
+1. `route.ts:85-89` wraps the resume in a bare `catch {}` that swallows the real reason and reports *"the orchestrator reconnects"* — which is **factually wrong** when the cause is a missing checkpoint. The operator is sent to the wrong page to retry something that can never succeed.
+2. The promised "Retry resume from Activity" banner does not render.
+
+**Next action, deliberately not taken blind:** reproduce in a browser against a **freshly started run** to confirm the stale-interrupt case, then change the catch to surface the orchestrator's actual status and wording, and add an e2e case asserting a stale approval is refused **honestly** rather than reported as a reconnection problem. Editing cockpit route semantics without first reproducing it is exactly the failure mode this checkpoint has logged seven times.
+
+**Two judgement calls recorded as correct.** The audit opened the Emergency stop dialog, confirmed all three gates (reason, exact phrase, reauthentication) and **did not submit** — it is a durable one-way latch and engaging it would wedge the stack; that is not an audit's decision to take unilaterally. It also did not reset the 0-byte journal. Both are the right calls.
+
+**Deliberately UNVERIFIED, not skipped:** Shopify OAuth install, all live-mode/Supabase auth, the refund and add-product forms, every Autonomy per-tab save, the 75-input pilot approval gate, and **every mobile/narrow viewport** (the audit stayed at 1440×900, so the responsive work in §0.7.5 is not re-verified here).
+
+## 8.10 N9 — credential isolation for build and test · CLOSED
+
+`[x]` **Closed with a before/after canary measurement.** The leak was reproduced on demand and is now unreachable.
+
+**Before.** `GITHUB_MCP_TOKEN=CANARY_…` plus `pnpm build --force`, then a grep of `apps/{cockpit,storefront}/.next` and `.turbo` — **3,668 files / 4.93 GB scanned, 4 occurrences**, in exactly the `…/cache/turbopack/v16.3.4-299180d3/*.sst` files from the 2026-10-08 incident.
+
+**After.** The same two packages, caches purged so the build is genuinely cold, with **nine** canaries set at once (`GITHUB_TOKEN`, `TURBO_TOKEN`, `LITELLM_MASTER_KEY`, `SHOPIFY_CLIENT_SECRET`, `KILL_SWITCH_OWNER_TOKEN`, `SUPABASE_SERVICE_ROLE_KEY` and others) — **3,591 files / 5.51 GB scanned, 0 occurrences**, and **0** again after a real `pnpm test:e2e`.
+
+Every number is from a **cold** build. A warm `pnpm build` reported "7 cached, 8 total" and re-serialised nothing, which is exactly why one cold build was enough to land a credential on disk in the first place.
+
+**The fix sits in the parent of Turbo**, so Turbo's `GITHUB_*` passthrough has nothing left to pass through. `turbo.json` is deliberately untouched and still declares no `env`, because that cannot work. Fail-closed: an unrecognised variable is **dropped**, which is the property that stops the *next* unknown agent credential from being serialised — adding a build input is now a deliberate edit.
+
+Legitimate inputs are asserted to survive byte-identical: `PATH`, `CI`, `NODE_ENV`, `NODE_OPTIONS`, `TURBO_FORCE`, `NEXT_PUBLIC_*`, `HOTL_*`, `GUARDRAIL_*`, `KILL_SWITCH_*`. `GITHUB_TOKEN` is blocked with the rest of the `GITHUB_` prefix: `actions/checkout` reads `${{ github.token }}` from the Actions **expression context** and runs as the first step, so it is unaffected, and letting it through would reopen this exact class.
+
+**Residual, not closed by this work:**
+
+- 🆕 **A credential already written to a cache outlives the pipeline fix.** The pre-fix canary was still sitting in the storefront `.sst` *after* the fix landed. Purging `.next/cache/turbopack` is a separate, mandatory step, and any credential that ever reached a build must be rotated. Both caches were purged and rebuilt clean here.
+- 🆕 `apps/cockpit/package.json` and `apps/storefront/package.json` still contain a raw `"build": "next build"`. `pnpm build`, `pnpm test` and `pnpm typecheck` are safe because the scrub sits above Turbo, but `pnpm --filter @hotl/cockpit build` bypasses it. Needs an edit in app scope.
+- 🆕 `apps/commerce-core/medusa` is an isolated npm project outside the workspace, runs in CI, and still bundles unscrubbed.
+- The `GITHUB_TOKEN`/checkout argument is reasoned from `ci.yml` and the upstream action definition; **no GitHub Actions run was available to observe it.**
+
+## 8.11 B-3 — approval resume now reports an accurate outcome · FIXED
+
+`[x]` **Fixed**, with the reproduction evidence in [`docs/b3-resume-evidence.md`](b3-resume-evidence.md).
+
+**B-3 was never a failure of approval resolution.** Two cases were reproduced in a real browser:
+
+| Case | Result |
+| --- | --- |
+| Fresh run, valid checkpoint | `POST /api/runs` → **201**; resolve → **200** with **no `warning` key**; orchestrator → **200 `completed`**, `resolvedInterruptIds` populated. **Works.** |
+| Stale approval, checkpoint gone | Orchestrator → **404 `RUN_REQUEST_FAILED` "This run has no saved checkpoint."** |
+
+The resume machinery is sound; the **reporting** was the defect. `route.ts` wrapped the resume in a bare `catch {}` that discarded both status and body and emitted one sentence for every failure — including telling the owner to *"retry resume from Activity after the orchestrator reconnects"* when the run can never be resumed again.
+
+**Two corrections to earlier checkpoint claims, both settled by evidence:**
+
+- 🆕 **"No seeded demo approvals exist" was wrong.** `apps/guardrail-service/src/seed.ts:25` seeds three *pending, resolvable* approvals bound to fabricated run ids (`run-support-01`, `run-marketing-01`, `run-sourcing-01`). They are real rows, listed in the cockpit, and reachable.
+- An approval outlives its run because `state.interrupts` is pruned only on resolve or Constitution change (`engine.ts:823`). The orchestrator's 404 is **deliberate** (`manager.ts:95-96`, rule 7 — a run with no checkpoint must not report a fabricated success).
+
+**The fix** extracts the decision into a pure, tested function, [`apps/cockpit/src/lib/resume-notice.ts`](../../apps/cockpit/src/lib/resume-notice.ts). A **404** is reported as permanent and **offers no retry**; an unreachable orchestrator stays retryable and says so; any other refusal names the orchestrator's own code. The durable owner decision is unchanged in every branch — that is what keeps this fail-safe rather than fail-open — and six tests pin it.
+
+**A self-inflicted defect found and fixed during this work, recorded because it is the same class again:** the B-4 routing fix initially exported its guard from `components/cockpit.tsx`, a `"use client"` module. A server component importing a function from a client module throws on **every** route. It was caught only because a teammate reported a 500 across the app while my own single-spec run passed. The registry now lives in `@/lib/types`, a plain module, and `page.tsx` imports it from there. **23/23 browser tests pass.** That is the eighth instance of "green locally, broken in context".
+
+## 8.9 Next checkpoint
+
+> **Superseded by §9.4 and §9.5**, which reflect live state at `1d58ac3`. Items 2 and 4 below are now **done** (CP-03B delivered; N7 resolved — the image build and artifact export now run and pass in CI). Items 1 and 3 remain open; item 5 stands.
+
+1. **CP-02 close-out** — re-run both workflows once Docker Hub recovers; obtain green `validate` on a real SHA; merge PR #5 under the owner's merge authority. Do not merge while any container step is red.
+2. **CP-03B** — the cockpit route/control and vertical Settings audit. `settings-page.tsx` (75 KB) and `operating-pages.tsx` (44 KB) exist and the browser drill covers their layout, but no per-control classification of working / simulated / disabled yet exists.
+3. **N1** — recompute the 19 staged settings against a real provisioned environment rather than a recorded shell.
+4. **N7** — prove the kill-switch image actually builds and is independently deployable, once the registry is reachable.
+5. Gate A remains blocked on the owner and cannot be advanced by any agent.
+
+---
+
+### 9.6 🚨 D-1 — 14 of the 20 autonomy domains are inert · HIGHEST-VALUE OPEN DEFECT
+
+Found by CP-ARCH in [`docs/target-architecture.md`](target-architecture.md) and **independently re-verified** by the Team Lead, not accepted on report.
+
+The Constitution defines **20** autonomy domains ([`packages/schemas/src/constitution.ts:3`](../../packages/schemas/src/constitution.ts)):
+
+`sourcing, supplier_contact, catalog, pricing, promotions, advertising, content, influencers, seo, email, sms, support, refunds, orders, fulfillment, purchasing, inventory, finance, marketplaces, experimentation`
+
+Every one is persisted, rendered in Settings, and owner-editable. **Only six ever reach a decision.** `this.autonomy(...)` is invoked with exactly these domain sets (`engine.ts:636, 645, 652, 675, 684, 716`), plus two direct `.paused` reads at `:346` and `:411` that concern the same domains:
+
+| Enforced (6) | Inert — persisted, editable, never read by any decision (14) |
+| --- | --- |
+| `catalog`, `pricing`, `advertising`, `refunds`, `purchasing`, `fulfillment` | `sourcing`, `supplier_contact`, `promotions`, `content`, `influencers`, `seo`, `email`, `sms`, `support`, `orders`, `inventory`, `finance`, `marketplaces`, `experimentation` |
+
+**Consequence, stated plainly:** an owner can open Settings, set `domains.finance.mode = AUTONOMOUS` — or `domains.support`, `domains.content`, `domains.orders` — and **nothing changes anywhere**. The orchestrator contains **zero** references to `domains`. `checkout` and `commerce.event` call `block`/`scope`/`context` but never `autonomy`, so `domains.orders` and `domains.inventory` are inert even though those operations are the ones an owner most wants to constrain.
+
+This is the clearest instance in the program of a control surface that **looks** load-bearing and is not. It is squarely against the standing rule that every visible function must work, be honestly labelled, or be explicitly unavailable. `[ ]` 🚨
+
+**Two ways to close it, both legitimate, neither chosen yet:** wire the remaining domains into real gates, or stop presenting them as operating policies and label them as recorded-but-not-enforced. The second is honest and cheap; the first is the actual roadmap. The decision is a product decision, not a silent engineering one, so it is escalated rather than assumed.
+
+### 9.7 Other reconciliation findings
+
+- **The "19 settings" figure is stale in framing.** `node scripts/staging-readiness.mjs` reports **19** static failures, matching the archived `PREFLIGHT.json`. But the check now contains **25** `requireField` calls — so **19 is what is currently failing, not the total**. Correct anywhere it is stated as a fixed set.
+- **B-1 is live, not historical.** `infra/kill-switch/data/events.jsonl` is 0 bytes on disk and `journal.ts:50` refuses an empty existing journal, so `pnpm dev` cannot start on this machine. Still owner-authorised recovery; still not reset by any agent.
+- **The authority boundary is strong but narrow.** `engine.ts:533` returns `LIVE_ADAPTERS_UNAVAILABLE` through every `block()` path in live mode, so live financial adapters fail closed *by construction* rather than by configuration, with exactly one deliberate exception (the owner-only Shopify dev-store price path). 25 properties are documented as unbypassable with file:line.
+- 🚨 **Sharpest discipline dependency:** in simulation mode a single published static string (`hotl-local-development-token`, in `dev.mjs:29` and `.env.example`) confers **full owner authority** on every owner-only route. Acceptable for a labelled simulation; unacceptable in deployment, and it must never reach a hosted environment.
+- 🆕 Multi-workspace isolation and runtime RLS privileges are **self-reported by the guardrail**, not independently observed — the staging-readiness source says so itself. Marked `[ ]`.
+
+## 9.8 Session reconciliation — 2026-10-10 (authoritative as of this commit)
+
+### 9.1 Named documents that do not exist
+
+Three documents were named as required reading:
+
+| Named | Status |
+| --- | --- |
+| `HOTL_ARCHITECTURE_RECONCILIATION_2026-10-10.md` | **Does not exist.** Not tracked, not on disk. |
+| `HOTL_MASTER_CHECKPOINT_RECONCILED_2026-10-10.md` | **Does not exist.** Not tracked, not on disk. |
+| `HOTL_CHANGE_VERIFICATION_MATRIX_2026-10-10.md` | **Does not exist.** Not tracked, not on disk. |
+
+Verified with `git ls-files --error-unmatch` against the live repository. **They were not read, because they are not there.** The authoritative equivalents in this repository are:
+
+- **Master checkpoint and working plan — this file.** `docs/FULL_PROGRAM_CHECKPOINT.md`; §§8–9 are current, §§0–7 are preserved history superseded only where they conflict.
+- **Change/verification matrix — §§8.2–8.11 and 9.3**, which carry per-change CI run IDs, before/after measurements and named commands.
+- **Cockpit control matrix —** [`docs/cockpit-route-and-settings-inventory.md`](cockpit-route-and-settings-inventory.md) (CP-03B, browser-backed).
+- **Security matrix —** [`docs/credential-exposure-status-2026-10-10.md`](credential-exposure-status-2026-10-10.md) and §8.10.
+- **B-3 reproduction evidence —** [`docs/b3-resume-evidence.md`](b3-resume-evidence.md).
+- **Architecture —** `docs/repo-structure.md`, `docs/implementation-notes.md`, `README.md`. There is **no reconciled target-architecture document**; recorded as 🆕 **N10**.
+
+### 9.2 Live Git and CI state at this commit
+
+| Item | State |
+| --- | --- |
+| Branch | `codex/cp02-ci-red-2026-10-10` |
+| HEAD | `1d58ac3` |
+| `origin/main` | `13a74aa` — **unchanged and still red**; PR #5 has not landed |
+| Divergence | **13 ahead, 0 behind** |
+| PR #5 | `OPEN`, `MERGEABLE`, `mergeStateStatus: BLOCKED`, **0 reviews** |
+| Branch protection | `main` requires `validate` **and 1 approving review**, `strict: true` |
+| CI at `1d58ac3` | `Isolated kill-switch checks and image` **SUCCESS**; `Main platform checks` **SUCCESS** (runs `38018722514`, `38018722422`) |
+| Worktree | Clean apart from three untracked, superseded root audit documents (§9.1) |
+
+The merge is blocked **only** on an approving review, which only the owner can give. No agent self-approves and branch protection is not weakened.
+
+### 9.3 Verified maturity — what is actually true
+
+| Area | Maturity | Evidence |
+| --- | --- | --- |
+| CI pipeline, both workflows | **M4 remote-verified** | SUCCESS at `1d58ac3`, including image build, artifact export, cross-process drill, both PostgreSQL drills and the credential scan |
+| Deterministic financial guardrail | **M3 integration** | 325 guardrail tests; concurrency ceiling proved with `race-a` allow / `race-b` `DAILY_CEILING_EXCEEDED` |
+| Ledger lock + ownership release | **M3** | D-B defect fixed; release is now ownership-verified |
+| Independent kill switch | **M3** | 36 tests; cross-process single-writer drill now genuinely runs |
+| Approval / resume reporting | **M3** | B-3 fixed; 6 tests; browser evidence in `b3-resume-evidence.md` |
+| Cockpit UI and Settings | **M2/M3** | 23/23 browser tests; CP-03B classified 11 routes and 9 panels |
+| Build/test credential isolation | **M3** | Canary 4 → 0 across 5.51 GB of caches, cold build |
+| Real commerce (Shopify, payments, suppliers) | **M0–M2** | **No external provider evidence. Gate C remains blocked.** |
+| Autonomy | **M0** | No measured shadow performance. Gate E blocked. |
+
+**M4 has been reached only for the CI pipeline itself.** No commerce capability has reached M4. Gates A, B and C are unchanged and blocked.
+
+### 9.4 Open ledger carried forward
+
+| # | Item | State |
+| --- | --- | --- |
+| 🚨 D1 | Revoke the disclosed fine-grained PAT | Owner. No rotation evidence exists in the repository. |
+| 🚨 — | Approve and merge PR #5 | Owner. The sole reason `main` is still red. |
+| 🚨 B-1 | Recover the preserved 0-byte kill journal | Owner-authorised runbook recovery. **Not** reset by any agent. |
+| 🚨 N1 | Recompute the 19 staged settings against a real provisioned environment | `[ ]` |
+| 🆕 N9a | `apps/cockpit/package.json` and `apps/storefront/package.json` still contain a raw `next build`; `pnpm --filter` bypasses the scrub | `[ ]` |
+| 🆕 N9b | `apps/commerce-core/medusa` is outside the workspace and still bundles unscrubbed | `[ ]` |
+| 🆕 N9c | A credential already written to a cache outlives the pipeline fix; purge `.next/cache/turbopack` and rotate anything that ever reached a build | `[ ]` 🚨 |
+| 🆕 N10 | No reconciled target-architecture document exists | `[ ]` |
+| `[ ]` | B-2 Activity layout clipping — needs browser measurement before any CSS change | `[ ]` |
+| `[ ]` | CP-03B remainder: refund form, add-product, Shopify OAuth, live-mode auth, Autonomy per-tab saves, the 75-input pilot gate, **all mobile viewports** | `[ ]` |
+
+### 9.5 Current working plan
+
+1. **CP-SEC** — close N9a / N9b / N9c with the canary method already proven in §8.10.
+2. **CP-CORE** — independent review of financial locks, concurrency, audit integrity, idempotency, checkpoints and the kill switch.
+3. **CP-03B** — B-2 plus the unverified control surface, prioritising financial actions, forms, authorization and mobile layouts.
+4. **CP-ARCH** — produce the reconciled target-architecture document (N10) from real source.
+5. **CP-05+** — Gates A/B/C remain owner- and externally-blocked; independent engineering continues around them.
+
+---
+
+> **§10 supersedes §9.4's open ledger and §9.5's working plan from `027c806` onward.**
+> The live execution state, the recovered stale-lock race and its fix, and the current open
+> ledger are in **[`SESSION_CHECKPOINT_2026-10-10.md`](SESSION_CHECKPOINT_2026-10-10.md)**.
+> Read that before acting on §9. Nothing here moves a gate.

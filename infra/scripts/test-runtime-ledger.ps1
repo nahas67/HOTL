@@ -26,6 +26,12 @@ function Invoke-Checked {
         # Start-Process -Wait waits for descendants on Windows; wait on pg_ctl only.
         $quotedArgs = $Arguments | ForEach-Object { '"' + $_.Replace('"', '\"') + '"' }
         $process = Start-Process -FilePath $Binary -ArgumentList $quotedArgs -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $drillRoot 'pgctl-output.log') -RedirectStandardError (Join-Path $drillRoot 'pgctl-error.log')
+        # Read .Handle once, now, so it is cached for the lifetime of this object.
+        # Windows PowerShell 5.1 returns a Process whose handle it never opened, so
+        # after exit .ExitCode yields $null rather than the real status -- and
+        # `$null -ne 0` is true, which reported a clean pg_ctl start as a failure
+        # with an empty "pg_ctl failed ()". Same fix as infra/scripts/test-database.ps1.
+        $null = $process.Handle
         if (-not $process.WaitForExit(45000)) { throw 'Disposable pg_ctl exceeded its timeout; inspect retained drill files.' }
         if ($process.ExitCode -ne 0) { throw "pg_ctl failed ($($process.ExitCode)); inspect retained drill logs." }
         return

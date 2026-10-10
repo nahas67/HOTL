@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -24,9 +25,20 @@ import { createEngine, type EngineOptions } from "../src/engine.js";
 const here = dirname(fileURLToPath(import.meta.url));
 const writerEntry = resolve(here, "fixtures", "ledger-writer.ts");
 // `--import` takes a specifier, so an absolute Windows path must be a file:// URL.
-const tsxLoader = pathToFileURL(
+// Both layouts are probed because a service may be built inside the pnpm workspace
+// (tsx hoisted to the repository root) or installed standalone. Hardcoding one of
+// them made this drill fail as a silent 30s timeout -- children that never started
+// and therefore tested nothing -- in whichever layout did not match.
+const tsxCandidates = [
   resolve(here, "..", "..", "..", "node_modules", "tsx", "dist", "loader.mjs"),
-).href;
+  resolve(here, "..", "node_modules", "tsx", "dist", "loader.mjs"),
+];
+const tsxPath = tsxCandidates.find(candidate => existsSync(candidate));
+if (!tsxPath)
+  throw new Error(
+    `Cannot locate the tsx loader for child processes. Looked in:\n${tsxCandidates.join("\n")}`,
+  );
+const tsxLoader = pathToFileURL(tsxPath).href;
 
 const WORKERS = 3;
 const ATTEMPTS_PER_WORKER = 3;

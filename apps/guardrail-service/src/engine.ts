@@ -4,7 +4,7 @@ import { dirname } from 'node:path';
 import { assertAggregateMoney, hotlModeSchema, campaignSchema, checkoutSchema, commerceEventSchema, configPatchSchema, fromMinor, listingSchema, marginCheckSchema, pauseSchema, refundSchema, resolveSchema, runEventSchema, spendCheckSchema, spendCommitSchema, supplierOrderSchema, toMinor, ZodError, type Actor, type AuditEntry, type CommerceOrder } from '@hotl/schemas';
 import { seedState } from './seed.js';
 import { addConstitution } from './constitution.js';
-import { autonomyDomains, constitutionSchema, constitutionPatchSchema, pilotApprovalRequestSchema, pilotEconomicsCalculationIssues, productCreateSchema, productUpdateSchema, campaignPauseSchema, type AutonomyDomain, type BusinessConstitution, type OwnerInterrupt } from '@hotl/schemas';
+import { autonomyDomainEnforcement, autonomyDomains, constitutionSchema, constitutionPatchSchema, pilotApprovalRequestSchema, pilotEconomicsCalculationIssues, productCreateSchema, productUpdateSchema, campaignPauseSchema, type AutonomyDomain, type BusinessConstitution, type OwnerInterrupt } from '@hotl/schemas';
 import type { EngineState, KillState } from './types.js';
 import type { RuntimeStateStore } from './stores/types.js';
 import { priceRequest, priceCancellation, priceInvestigation, shopifyData, ownVariant, sameObservation, validateShopifyCommerceState, type PriceRequest, type PriceOperation, type PriceReceipt } from './shopify-state.js';
@@ -179,7 +179,15 @@ export class GuardrailEngine {
       catch(error) {this.checkMissingState(error);}
     }
     this.verify(this.state);
-    return structuredClone(this.state);
+    const snapshot=structuredClone(this.state);
+    // Stamp the current build's autonomy-domain enforcement onto the Constitution on every read.
+    // Stamping here rather than only in `defaultConstitution` is what lets a ledger written before
+    // this field existed keep validating against `constitutionSchema` (AGENTS.md rule 7) while every
+    // owner-facing response -- `/api/constitution`, `/api/agent-context`, `/api/operating-state`,
+    // `/api/telemetry` -- reports which domains are genuinely enforced. Because the map is derived
+    // from engine code and `constitutionPatchSchema` has no field for it, an owner cannot assert it.
+    if(snapshot.constitution)snapshot.constitution={...snapshot.constitution,domainEnforcement:autonomyDomainEnforcement};
+    return snapshot;
   }
   /**
    * True only when the lock file provably belongs to a process that no longer exists.
@@ -199,6 +207,67 @@ export class GuardrailEngine {
         return code==='ESRCH';
       }
     } catch {return false;}
+  }
+
+  /**
+   * True when a lock file sits at `lockPath` and its owner may still be writing.
+   *
+   * This is the judgement `orphaned()` makes, inverted, and it exists to be re-run at the
+   * exact moment a recovery deletes the file. Judging the owner dead and deleting its lock
+   * are two separate steps, so between them the lock can be recovered and re-taken by a live
+   * writer -- and deleting that writer's lock puts two processes inside one critical section.
+   * Anything unreadable or unparseable counts as occupied, so uncertainty deletes nothing.
+   */
+  private async occupied(lockPath:string):Promise<boolean> {
+    let recorded:string;
+    try {recorded=(await readFile(lockPath,'utf8')).trim();}
+    catch(error) {return (error as NodeJS.ErrnoException).code!=='ENOENT';}
+    if(!/^\d+$/.test(recorded))return true;
+    const owner=Number(recorded);
+    if(owner===process.pid)return true;
+    try {process.kill(owner,0);return true;}
+    catch(error) {return (error as NodeJS.ErrnoException).code!=='ESRCH';}
+  }
+
+  /**
+   * Claim the single-winner right to recover an abandoned lock.
+   *
+   * `open(path,'wx')` is the only atomic create-if-absent primitive available portably here,
+   * so the reclaim token is what makes recovery mutually exclusive: exactly one process can
+   * hold it, therefore exactly one process can ever delete an orphaned lock.
+   *
+   * Without it, two processes recovering the SAME abandoned lock both pass the dead-owner
+   * test, and the slower one's unconditional `unlink` then deletes the faster one's freshly
+   * acquired lock. Both are then inside the critical section doing read-modify-write on the
+   * ledger, neither ever lost the lock from its own point of view so the ownership-checked
+   * release cannot help, and the daily ceiling is enforced against two copies of one state --
+   * which is how two grants are issued against a single budget.
+   *
+   * A token already on disk is refused outright, including when its recorded owner is
+   * provably dead. Reclaiming a stale token reproduces this identical race one level up, so
+   * it is an operator decision: an uncertain lock denies rather than self-healing.
+   */
+  private async claimReclaim(tokenPath:string):Promise<Awaited<ReturnType<typeof open>>> {
+    try {
+      const token=await open(tokenPath,'wx');
+      try {await token.writeFile(String(process.pid));await token.sync();}
+      catch(error) {await token.close().catch(()=>{});await unlink(tokenPath).catch(()=>{});throw error;}
+      return token;
+    } catch {
+      throw new GuardrailError('STATE_BUSY','The guardrail state lock is abandoned and is already being recovered by another process, or an earlier recovery stopped part-way. Retry with the same key; if the retry keeps failing, follow the stale-lock runbook before restarting.',503);
+    }
+  }
+
+  private async releaseReclaim(token:Awaited<ReturnType<typeof open>>,tokenPath:string):Promise<void> {
+    await token.close().catch(()=>{});
+    // Unlike the lock, the token needs no ownership re-read. It was created with `open(...,'wx')`
+    // and every other process is refused at that same exclusive create, so nothing can replace
+    // it while this handle is open -- there is no window in which the path could name a token
+    // belonging to someone else. Deleting it unconditionally is therefore safe, and it removes
+    // the one failure mode an ownership check would add: on Windows the re-read can observe a
+    // delete-pending name and skip the delete, leaving a token that wedges every later recovery.
+    try {await unlink(tokenPath);}
+    catch(error) {if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}
   }
 
   private async applyTransaction(state:EngineState,operation:string,payload:unknown,actor:Actor,key:string,action:(state:EngineState)=>Promise<Result>|Result) {
@@ -256,8 +325,10 @@ export class GuardrailEngine {
         return structuredClone(committed.result);
       }
       let handle:Awaited<ReturnType<typeof open>>|undefined;
+      let reclaim:Awaited<ReturnType<typeof open>>|undefined;
       const lockPath=this.options.filePath ? `${this.options.filePath}.lock` : undefined;
-      if(lockPath) {
+      const reclaimPath=lockPath ? `${lockPath}.reclaim` : undefined;
+      if(lockPath&&reclaimPath) {
         try {handle=await open(lockPath,'wx');await handle.writeFile(String(process.pid));await handle.sync();}
         catch(error) {
           const code=(error as NodeJS.ErrnoException).code;
@@ -270,9 +341,23 @@ export class GuardrailEngine {
             // is allowed ONLY for a provably dead owner: an unreadable, empty or foreign lock
             // still denies, so an uncertain situation fails closed.
             if(code==='EEXIST'&&await this.orphaned(lockPath)) {
-              try {await unlink(lockPath);} catch {throw new GuardrailError('STATE_BUSY','The guardrail state lock is unavailable; retry with the same key.',503);}
-              try {handle=await open(lockPath,'wx');await handle.writeFile(String(process.pid));await handle.sync();}
-              catch {throw new GuardrailError('STATE_BUSY','The guardrail state lock is unavailable; retry with the same key.',503);}
+              reclaim=await this.claimReclaim(reclaimPath);
+              try {
+                // Re-judge immediately before deleting. Another reclaimer may have completed
+                // and a live writer taken the lock in the gap between `orphaned()` and here;
+                // deleting that lock is the defect this whole sequence exists to prevent.
+                if(await this.occupied(lockPath))throw new GuardrailError('STATE_BUSY','The guardrail state lock is unavailable; retry with the same key.',503);
+                try {await unlink(lockPath);}
+                catch(error) {if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}
+                try {handle=await open(lockPath,'wx');}
+                catch {throw new GuardrailError('STATE_BUSY','The guardrail state lock is unavailable; retry with the same key.',503);}
+                await handle.writeFile(String(process.pid));
+                await handle.sync();
+              } catch(error) {
+                await this.releaseReclaim(reclaim,reclaimPath);reclaim=undefined;
+                if(error instanceof GuardrailError)throw error;
+                throw new GuardrailError('STATE_BUSY','The guardrail state lock is unavailable; retry with the same key.',503,{cause:faultLabel(error)});
+              }
             } else throw new GuardrailError('STATE_BUSY','The guardrail state lock is unavailable; retry with the same key.',503);
           } else throw error;
         }
@@ -303,7 +388,31 @@ export class GuardrailEngine {
         }
         this.state=state;
         return structuredClone(result);
-      } finally {if(handle) await handle.close();if(lockPath&&handle) await unlink(lockPath);}
+      } finally {
+        // No `return` here: a `return` inside `finally` discards the value the `try` block
+        // produced, silently turning every transaction's result into `undefined`.
+        if(handle) {
+          await handle.close();
+          // Release ONLY a lock this process still owns.
+          //
+          // Unlinking `lockPath` unconditionally is unsound: recovery above can delete a lock
+          // whose recorded owner is momentarily unreadable or gone, after which two processes
+          // can each believe they hold it. The faster one then deletes the slower one's lock file
+          // in this `finally`, and the slower one fails to release with ENOENT -- observed in
+          // the cross-process drill. Re-reading the recorded pid and comparing it to our own
+          // makes the delete conditional on still being the owner, so a stolen lock is never
+          // removed on the way out. Any uncertainty here leaves the file alone: this
+          // transaction has already committed, and a crashed owner is recoverable.
+          if(lockPath)try {
+            if((await readFile(lockPath,'utf8')).trim()===String(process.pid))await unlink(lockPath);
+          } catch {}
+        }
+        // The reclaim token is released on every exit path, including a denial or an
+        // unexpected fault -- otherwise a refused transaction would wedge every later
+        // recovery, which is a denial of service created by this fix rather than prevented
+        // by it. A token left behind is therefore always a genuinely abandoned recovery.
+        if(reclaim&&reclaimPath)await this.releaseReclaim(reclaim,reclaimPath);
+      }
     };
     const pending=this.tail.then(work,work);this.tail=pending.catch(()=>{});return pending;
   }
@@ -518,7 +627,15 @@ export class GuardrailEngine {
     const now=this.now(),day=DAY(now);
     return (state.seedSpendDay===day?state.seedSpendMinor:0)+state.reservations.filter(item=>item.day===day&&(item.status==='committed'||item.status==='reserved'&&new Date(item.expiresAt)>now)).reduce((sum,item)=>sum+item.amountMinor,0);
   }
-  private constitution(state:EngineState):BusinessConstitution {if(!state.constitution)throw new GuardrailError('STATE_INVALID','Constitution migration is required.',503);return state.constitution;}
+  /**
+   * The owner-visible autonomy policy, carrying the current build's enforcement truth.
+   *
+   * Every write path builds the next Constitution from a structured clone of this, so the stamped
+   * map is persisted by the first owner policy edit after it is introduced. It is not copied from
+   * caller input: `constitutionPatchSchema` derives from `constitutionFieldsSchema`, which has no
+   * `domainEnforcement` field, so `updateConstitution` cannot write a different one.
+   */
+  private constitution(state:EngineState):BusinessConstitution {if(!state.constitution)throw new GuardrailError('STATE_INVALID','Constitution migration is required.',503);return {...state.constitution,domainEnforcement:autonomyDomainEnforcement};}
   private monthlySpend(state:EngineState) {
     const month=DAY(this.now()).slice(0,7),now=this.now();
     return (state.seedSpendDay.startsWith(month)?state.seedSpendMinor:0)+state.reservations.filter(r=>r.day.startsWith(month)&&(r.status==='committed'||r.status==='reserved'&&new Date(r.expiresAt)>now)).reduce((sum,r)=>sum+r.amountMinor,0);
@@ -567,14 +684,17 @@ export class GuardrailEngine {
   private proposal(state:EngineState,operation:string,input:Result,actor:Actor,domain:AutonomyDomain,reason:string):Result {
     const signature=digest({operation,input,actor});
     const existing=state.interrupts.find(p=>p.status==='pending'&&p.payload.proposalFingerprint===signature);
-    if(existing)return {decision:'escalated',interruptId:existing.id,reason,mode:this.mode};
+    // Both results name the governing domain, so an escalation is self-describing exactly as a
+    // denial is. A caller holding only this response can tell the owner WHICH of the twenty domain
+    // policies sent the action to the approval queue.
+    if(existing)return {decision:'escalated',interruptId:existing.id,reason,domain,mode:this.mode};
     const id=randomUUID(),runId=String(input.runId??`run-${id}`),constitution=this.constitution(state);
     const request:Result={...input,expectedConstitutionVersion:constitution.version};
     if(request.expectedRevision===undefined&&request.orderId)request.expectedRevision=state.orders.find(o=>o.id===request.orderId)?.revision;
     if(request.expectedRevision===undefined&&request.productId)request.expectedRevision=state.products.find(p=>p.id===request.productId)?.revision;
     const payload={operation,request:structuredClone(request),actor:structuredClone(actor),domain,constitutionVersion:constitution.version,resourceRevision:request.expectedRevision??null,proposalFingerprint:signature,policy:structuredClone(constitution.domains[domain])};
     state.interrupts.push({id,runId,threadId:runId,category:operation==='refunds.evaluate'?'refund_escrow':'other',title:`${domain[0]!.toUpperCase()+domain.slice(1)} action needs approval`,summary:`${operation} requires your decision: ${reason}.`,agentName:actor.id,priority:'medium',payload,status:'pending',createdAt:this.now().toISOString(),expiresAt:null,requiredAction:'approve|reject|modify'});
-    return {decision:'escalated',interruptId:id,reason,constitutionVersion:constitution.version,mode:this.mode};
+    return {decision:'escalated',interruptId:id,reason,domain,constitutionVersion:constitution.version,mode:this.mode};
   }
   private autonomy(state:EngineState,operation:string,input:Result,actor:Actor,domains:AutonomyDomain[],amount:number,approved=false):Result|null {
     const scope=this.scope(operation,actor);if(scope)return scope;
@@ -667,6 +787,12 @@ export class GuardrailEngine {
       return {decision:'allow',status:'paused',before,after:structuredClone(campaign),mode:this.mode};
     }
     if(operation==='spend.commit')return this.commit(state,spendCommitSchema.parse(input),actor,approved);
+    // Commerce mutations go through `execute` so an escalated proposal can be resolved. An owner
+    // approval re-enters this path with `approved: true`, which still refuses a paused or MANUAL
+    // domain and still re-checks the Constitution binding -- an approval is authority for one
+    // decision, never a standing bypass of owner policy.
+    if(operation==='commerce.checkout')return this.checkoutOrder(state,input,actor,approved);
+    if(operation==='commerce.event')return this.applyCommerceEvent(state,input,actor,approved);
     return deny('UNSUPPORTED_OPERATION');
   }
   private reserve(state:EngineState,input:ReturnType<typeof spendCheckSchema.parse>,actor:Actor):Result {
@@ -766,7 +892,7 @@ export class GuardrailEngine {
           request=structuredClone(original);executionActor=item.payload.actor as Actor;
           if(!executionActor||!['agent','owner'].includes(executionActor.type))return deny('PROPOSAL_INVALID');
         }
-        const mutable:Record<string,string[]>={'refunds.evaluate':['amount','reasonCode'],'listing.publish':['sellingPrice'],'campaign.launch':['requestedAmount'],'spend.check':['requestedAmount'],'supplier.order':['quantity'],'spend.commit':[],'campaign.pause':[]};
+        const mutable:Record<string,string[]>={'refunds.evaluate':['amount','reasonCode'],'listing.publish':['sellingPrice'],'campaign.launch':['requestedAmount'],'spend.check':['requestedAmount'],'supplier.order':['quantity'],'spend.commit':[],'campaign.pause':[],'commerce.checkout':[],'commerce.event':['tracking']};
         const unexpected=Object.keys(changes).filter(field=>!mutable[operation]?.includes(field)&&!['orderId','productId','campaignId','reservationId'].includes(field));
         if(unexpected.length)throw new GuardrailError('APPROVAL_FIELDS_IMMUTABLE','Only operation-specific action values may be modified.',400,{fields:unexpected});
         request={...request,...changes};
@@ -875,70 +1001,102 @@ export class GuardrailEngine {
     const state=await this.snapshot();
     return {constitution:state.constitution,proposals:state.interrupts,resourceRevisions:{products:Object.fromEntries(state.products.map(p=>[p.id,p.revision])),orders:Object.fromEntries(state.orders.map(o=>[o.id,o.revision])),campaigns:Object.fromEntries(state.campaigns.map(c=>[String(c.campaignId),c.revision]))},mode:this.mode,paused:state.paused,campaigns:state.campaigns};
   }
+  /**
+   * The per-domain answer to "does this control do anything?".
+   *
+   * Read from code, never from configuration, so it cannot be edited by an owner and cannot drift
+   * from the gates that actually run. Surfaced on the Constitution by `snapshot()`; this method is
+   * the direct accessor for callers that only need the map.
+   */
+  autonomyDomainStatus() {
+    return {domains:autonomyDomains.map(domain=>({domain,...autonomyDomainEnforcement[domain]})),mode:this.mode};
+  }
   async placeSupplierOrder(raw:unknown,actor:Actor,key:string) {
     const input=supplierOrderSchema.parse(raw);
     return this.transaction('supplier.order',input,actor,key,state=>this.execute(state,'supplier.order',input,actor));
   }
   async checkout(raw:unknown,actor:Actor,key:string) {
     const input=checkoutSchema.parse(raw);
-    return this.transaction('commerce.checkout',input,actor,key,async state=>{
-      const blocked=await this.block(state);if(blocked)return blocked;
-      // Commerce mutations go through the same scope and Constitution-version gates as every
-      // other consequential action. Without this they inherited no engine-level authorization
-      // at all, and only the HTTP route's access check stood between an agent and an order.
-      const scopeIssue=this.scope('commerce.checkout',actor);if(scopeIssue)return scopeIssue;
-      const contextIssue=this.context(state,input,actor,'commerce.checkout');if(contextIssue)return contextIssue;
-      const c=this.constitution(state);
-      if(c.permittedCountries.length||c.prohibitedCountries.length){if(!input.destinationCountry)return deny('DESTINATION_COUNTRY_REQUIRED');if(c.prohibitedCountries.includes(input.destinationCountry)||c.permittedCountries.length&&!c.permittedCountries.includes(input.destinationCountry))return deny('COUNTRY_NOT_PERMITTED');}
-      const quantities=new Map<string,number>();for(const line of input.items)quantities.set(line.productId,(quantities.get(line.productId)??0)+line.quantity);
-      const items:CommerceOrder['items']=[];
-      for(const [id,quantity] of quantities) {
-        if(quantity>20)return deny('ITEM_QUANTITY_LIMIT_EXCEEDED',{productId:id,maximum:20});
-        const product=state.products.find(item=>item.id===id&&item.status==='active');if(!product)return deny('PRODUCT_NOT_AVAILABLE',{productId:id});
-        const restricted=this.productRestriction(state,product);if(restricted)return restricted;
-        if(quantity>product.inventory)return deny('INSUFFICIENT_INVENTORY',{productId:id});
-        const margin=this.margin(state,{sku:product.sku,sellingPrice:product.price,landedCost:product.landedCost,estimatedCac:product.estimatedCac,currency:'USD'});if(margin.decision!=='allow')return margin;
-        items.push({productId:id,name:product.name,quantity,price:product.price});
-      }
-      const total=fromMinor(items.reduce((sum,item)=>sum+toMinor(item.price)*item.quantity,0));
-      // Bound a single order's value. This is a blast-radius bound, not an approval gate: it
-      // denies for every actor including the owner, because no approval path may construct an
-      // order whose value the ledger's money domains cannot represent. Exactly at the ceiling
-      // is permitted.
-      if(toMinor(total)>MAX_ORDER_VALUE*100)return deny('ORDER_VALUE_LIMIT_EXCEEDED',{maximumOrderValue:MAX_ORDER_VALUE});
-      const order:CommerceOrder={id:`ORD-${randomUUID().slice(0,8).toUpperCase()}`,revision:1,customer:input.customer,items,total,refunded:0,status:'processing',createdAt:this.now().toISOString(),tracking:null};
-      for(const line of items) {const product=state.products.find(item=>item.id===line.productId)!;product.inventory-=line.quantity;product.orders+=line.quantity;product.revision=(product.revision??1)+1;product.revenue=assertAggregateMoney(fromMinor(toMinor(product.revenue)+toMinor(line.price)*line.quantity),`product ${product.sku} revenue`);this.supersede(state,product.id);}
-      state.orders.unshift(order);state.baseRevenue=assertAggregateMoney(fromMinor(toMinor(state.baseRevenue)+toMinor(total)),'workspace revenue');state.baseOrders++;
-      return {decision:'allow',order,mode:this.mode,paymentStatus:'simulated',message:'Simulation order created. No payment was charged.'};
-    });
+    return this.transaction('commerce.checkout',input,actor,key,state=>this.execute(state,'commerce.checkout',input,actor));
+  }
+  /**
+   * Creates a commerce order and takes stock.
+   *
+   * `execute` has already applied the kill/pause boundary, the agent scope, and the
+   * Constitution-version and resource-revision binding; this method owns only the order rules.
+   */
+  private checkoutOrder(state:EngineState,input:Result,actor:Actor,approved:boolean):Result {
+    const request=checkoutSchema.parse(input);
+    const c=this.constitution(state);
+    if(c.permittedCountries.length||c.prohibitedCountries.length){if(!request.destinationCountry)return deny('DESTINATION_COUNTRY_REQUIRED');if(c.prohibitedCountries.includes(request.destinationCountry)||c.permittedCountries.length&&!c.permittedCountries.includes(request.destinationCountry))return deny('COUNTRY_NOT_PERMITTED');}
+    const quantities=new Map<string,number>();for(const line of request.items)quantities.set(line.productId,(quantities.get(line.productId)??0)+line.quantity);
+    const items:CommerceOrder['items']=[];
+    for(const [id,quantity] of quantities) {
+      if(quantity>20)return deny('ITEM_QUANTITY_LIMIT_EXCEEDED',{productId:id,maximum:20});
+      const product=state.products.find(item=>item.id===id&&item.status==='active');if(!product)return deny('PRODUCT_NOT_AVAILABLE',{productId:id});
+      const restricted=this.productRestriction(state,product);if(restricted)return restricted;
+      if(quantity>product.inventory)return deny('INSUFFICIENT_INVENTORY',{productId:id});
+      const margin=this.margin(state,{sku:product.sku,sellingPrice:product.price,landedCost:product.landedCost,estimatedCac:product.estimatedCac,currency:'USD'});if(margin.decision!=='allow')return margin;
+      items.push({productId:id,name:product.name,quantity,price:product.price});
+    }
+    const total=fromMinor(items.reduce((sum,item)=>sum+toMinor(item.price)*item.quantity,0));
+    // Bound a single order's value. This is a blast-radius bound, not an approval gate: it
+    // denies for every actor including the owner, because no approval path may construct an
+    // order whose value the ledger's money domains cannot represent. Exactly at the ceiling
+    // is permitted.
+    if(toMinor(total)>MAX_ORDER_VALUE*100)return deny('ORDER_VALUE_LIMIT_EXCEEDED',{maximumOrderValue:MAX_ORDER_VALUE});
+    // Autonomy gate for `orders` and `inventory`. Until this call existed, checkout was the one
+    // agent-reachable mutation that took stock, created an order and rolled revenue forward, and it
+    // evaluated no autonomy domain at all: an owner who set `orders` or `inventory` to MANUAL or
+    // PAUSED saw no change anywhere. Evaluated after every unconditional order rule above, so a
+    // denial never spends an owner decision on a request that was already going to be refused.
+    const gate=this.autonomy(state,'commerce.checkout',input,actor,['orders','inventory'],total,approved);if(gate)return gate;
+    const order:CommerceOrder={id:`ORD-${randomUUID().slice(0,8).toUpperCase()}`,revision:1,customer:request.customer,items,total,refunded:0,status:'processing',createdAt:this.now().toISOString(),tracking:null};
+    for(const line of items) {const product=state.products.find(item=>item.id===line.productId)!;product.inventory-=line.quantity;product.orders+=line.quantity;product.revision=(product.revision??1)+1;product.revenue=assertAggregateMoney(fromMinor(toMinor(product.revenue)+toMinor(line.price)*line.quantity),`product ${product.sku} revenue`);this.supersede(state,product.id);}
+    state.orders.unshift(order);state.baseRevenue=assertAggregateMoney(fromMinor(toMinor(state.baseRevenue)+toMinor(total)),'workspace revenue');state.baseOrders++;
+    return {decision:'allow',order,mode:this.mode,paymentStatus:'simulated',message:'Simulation order created. No payment was charged.'};
   }
   async commerceEvent(raw:unknown,actor:Actor,key:string) {
     const input=commerceEventSchema.parse(raw);
-    return this.transaction('commerce.event',input,actor,key,async state=>{
-      const blocked=await this.block(state);if(blocked)return blocked;
-      const scopeIssue=this.scope('commerce.event',actor);if(scopeIssue)return scopeIssue;
-      const contextIssue=this.context(state,input,actor,'commerce.event');if(contextIssue)return contextIssue;
-      const order=state.orders.find(item=>item.id===input.orderId);if(!order)return deny('ORDER_NOT_FOUND');
-      if(state.commerceEvents.includes(input.eventId)) {
-        const previous=state.audit.find(entry=>entry.eventType==='commerce.event'&&(entry.payload.request as {eventId?:string}|undefined)?.eventId===input.eventId);
-        if(!previous||digest(previous.payload.request)!==digest(input))return deny('COMMERCE_EVENT_CONFLICT');
-        return {status:'already_processed',eventId:input.eventId,mode:this.mode};
-      }
-      if(input.type==='payment.confirmed') {
-        if(!['processing','payment_failed'].includes(order.status))return deny('ORDER_TRANSITION_DENIED');
-        order.status='processing';
-      }
-      if(input.type==='payment.failed') {
-        if(!['processing','payment_failed'].includes(order.status)||state.supplierOrders.some(item=>item.orderId===order.id))return deny('ORDER_TRANSITION_DENIED');
-        order.status='payment_failed';
-      }
-      if(input.type==='fulfillment.updated') {
-        if(!['processing','shipped'].includes(order.status))return deny('ORDER_TRANSITION_DENIED');
-        order.status='shipped';order.tracking=input.tracking??order.tracking;
-      }
-      order.revision=(order.revision??1)+1;this.supersede(state,order.id);
-      state.commerceEvents.push(input.eventId);return {status:'processed',orderId:order.id,eventId:input.eventId,mode:this.mode};
-    });
+    return this.transaction('commerce.event',input,actor,key,state=>this.execute(state,'commerce.event',input,actor));
+  }
+  /**
+   * Moves an order between its payment and fulfillment states.
+   *
+   * `payment.confirmed` / `payment.failed` decide whether captured money is recorded against the
+   * order and whether it stays refundable, so they are the `finance` decision. `fulfillment.updated`
+   * ships the order, so it is the `fulfillment` decision. Both remain an `orders` decision.
+   */
+  private applyCommerceEvent(state:EngineState,input:Result,actor:Actor,approved:boolean):Result {
+    const request=commerceEventSchema.parse(input);
+    const order=state.orders.find(item=>item.id===request.orderId);if(!order)return deny('ORDER_NOT_FOUND');
+    // Provider event replay is answered before policy: a webhook the workspace already processed is
+    // an idempotent acknowledgement, not a new action that could consume an owner decision.
+    if(state.commerceEvents.includes(request.eventId)) {
+      const previous=state.audit.find(entry=>entry.eventType==='commerce.event'&&(entry.payload.request as {eventId?:string}|undefined)?.eventId===request.eventId);
+      if(!previous||digest(previous.payload.request)!==digest(request))return deny('COMMERCE_EVENT_CONFLICT');
+      return {decision:'allow',status:'already_processed',eventId:request.eventId,mode:this.mode};
+    }
+    const shipping=request.type==='fulfillment.updated';
+    const gate=this.autonomy(state,'commerce.event',input,actor,shipping?['orders','fulfillment']:['orders','finance'],shipping?0:order.total,approved);
+    if(gate)return gate;
+    if(request.type==='payment.confirmed') {
+      if(!['processing','payment_failed'].includes(order.status))return deny('ORDER_TRANSITION_DENIED');
+      order.status='processing';
+    }
+    if(request.type==='payment.failed') {
+      if(!['processing','payment_failed'].includes(order.status)||state.supplierOrders.some(item=>item.orderId===order.id))return deny('ORDER_TRANSITION_DENIED');
+      order.status='payment_failed';
+    }
+    if(shipping) {
+      if(!['processing','shipped'].includes(order.status))return deny('ORDER_TRANSITION_DENIED');
+      order.status='shipped';order.tracking=request.tracking??order.tracking;
+    }
+    order.revision=(order.revision??1)+1;this.supersede(state,order.id);
+    // Every result leaving an engine operation carries an explicit `decision`. An owner approval
+    // re-enters this path and `resolveInterrupt` treats a missing decision as "not executed", which
+    // would leave the proposal pending forever while the order had in fact moved.
+    state.commerceEvents.push(request.eventId);return {decision:'allow',status:'processed',orderId:order.id,eventId:request.eventId,mode:this.mode};
   }
   async recordRunEvent(raw:unknown,actor:Actor,key:string) {
     const input=runEventSchema.parse(raw);

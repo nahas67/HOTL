@@ -35,3 +35,55 @@ test('the audit chain verdict never renders as healthy when the log cannot be re
   // It must not claim the chain is verified while it is unknown.
   await expect(panel.getByText(/Chain verified/)).toHaveCount(0);
 });
+
+// B-2 regression. `.metric-context` is authored for `.metric-card`, which supplies its
+// own padding (18px 19px 16px). Reused as a direct child of `.panel` -- which supplies
+// none -- the verdict row rendered 1px from the card's left and bottom border while the
+// heading above it was inset 23px, so the row read as clipped by the card.
+//
+// Measured before the fix at 1440x900: row glyph left 271 vs panel left 270 (1px inset),
+// row bottom 461.8 vs panel bottom 462.8 (1px inset). `.panel` is `padding:0` with
+// `overflow:hidden`, so the clipping was real, not a screenshot artefact.
+//
+// The assertions are on GLYPH positions (via Range), not element boxes: the element box
+// legitimately spans the full content width, so measuring the box would have passed
+// before the fix and failed to catch the regression.
+test('the audit chain verdict row sits inside the panel, aligned with its heading', async ({ page }) => {
+  // 375 and 360 are in this list because their absence is exactly what let a regression
+  // through: the fix carried a `@media(max-width:380px)` rule mirroring `.main-content`'s 13px
+  // while `.panel-header` kept its 18px there, putting the row 5px left of the heading it
+  // aligns with -- and the first version of this sweep stopped at 390, so it reported green.
+  for (const width of [1440, 1024, 760, 390, 375, 360]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto('/activity', { waitUntil: 'networkidle' });
+
+    const panel = page.locator('section', { has: page.getByRole('heading', { name: 'Audit chain integrity' }) });
+    await expect(panel.getByText(/Chain verified|Chain state:/)).toBeVisible();
+
+    const measured = await page.evaluate(() => {
+      const panel = document.querySelector('section[aria-labelledby="audit-integrity-title"]')!;
+      const row = panel.querySelector('.metric-context') as HTMLElement;
+      const heading = panel.querySelector('h2') as HTMLElement;
+      const textLeft = (el: Element) => {
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        return range.getBoundingClientRect().left;
+      };
+      const box = panel.getBoundingClientRect();
+      const rowBox = row.getBoundingClientRect();
+      const style = getComputedStyle(row);
+      return {
+        alignmentDelta: textLeft(row) - textLeft(heading),
+        leftInset: textLeft(row) - box.left,
+        bottomInset: box.bottom - (rowBox.bottom - parseFloat(style.paddingBottom)),
+        panelPadding: getComputedStyle(panel).paddingTop,
+      };
+    });
+
+    expect(Math.abs(measured.alignmentDelta), `verdict row must align with the panel heading at ${width}px`).toBeLessThanOrEqual(1);
+    expect(measured.leftInset, `verdict row must be inset from the panel border at ${width}px`).toBeGreaterThanOrEqual(16);
+    expect(measured.bottomInset, `verdict row must be inset from the panel bottom at ${width}px`).toBeGreaterThanOrEqual(16);
+    // The panel supplies no padding of its own -- the precondition for this defect.
+    expect(measured.panelPadding, 'this test only means something while .panel stays un-padded').toBe('0px');
+  }
+});

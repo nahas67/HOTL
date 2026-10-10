@@ -97,7 +97,13 @@ describe('quiescent ledger and workflow backup restore', () => {
     expect(await readFile(`${checkpointBackup}.initialized`)).toEqual(checkpointMarkerBytes);
     expect(await readFile(ledger)).toEqual(ledgerBytes);
     expect(await readFile(checkpoints)).toEqual(checkpointBytes);
-  }, 15000);
+    // This case starts two HTTP servers, runs a real commerce cycle to a genuine owner
+    // interrupt, resolves it, stops both, backs up and restores the ledger and the graph
+    // checkpoints byte for byte, and restarts. Measured at 4.8-5.3s locally across three
+    // consecutive runs, and 18.8s on the CI runner, which exceeded the 15s this previously
+    // carried and reddened `validate` at 7e703ad. The timeout is raised to match the real
+    // cost; no assertion is weakened and no step is removed.
+  }, 60000);
 
   it.each(['truncated', 'unsupported-version'] as const)('refuses a %s checkpoint restore without overwriting the supplied file', async fault => {
     const directory = await mkdtemp(join(tmpdir(), 'hotl-checkpoint-restore-'));

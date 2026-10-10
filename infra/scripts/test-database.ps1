@@ -52,12 +52,25 @@ try {
         Set-Content -LiteralPath $raceSql -Value $statement -Encoding ascii
         # Start-Process joins ArgumentList, so quote the generated file path explicitly.
         $arguments = $sqlArgs + @('-f', ('"' + $raceSql + '"'))
-        $raceProcesses += Start-Process -FilePath $psql -ArgumentList $arguments -PassThru -WindowStyle Hidden -RedirectStandardOutput (Join-Path $drillRoot "race-$suffix.out") -RedirectStandardError (Join-Path $drillRoot "race-$suffix.err")
+        $race = Start-Process -FilePath $psql -ArgumentList $arguments -PassThru -WindowStyle Hidden -RedirectStandardOutput (Join-Path $drillRoot "race-$suffix.out") -RedirectStandardError (Join-Path $drillRoot "race-$suffix.err")
+        # Read .Handle once, now, so the handle is cached for the lifetime of this
+        # object. Windows PowerShell 5.1 hands back a Process whose handle it never
+        # opened, so after the process exits .ExitCode yields $null instead of the
+        # real status -- and `$null -ne 0` is true, so a run that actually produced
+        # the correct allow/deny pair was reported as a failure. The race processes
+        # exit 0 on a successful contention test, including the one that is denied.
+        $null = $race.Handle
+        $raceProcesses += $race
     }
     foreach ($process in $raceProcesses) {
         $process.WaitForExit()
         $process.Refresh()
-        if ($process.ExitCode -ne 0) { throw "Concurrent reservation process failed. Inspect $drillRoot" }
+        if ($process.ExitCode -ne 0) {
+            $detail = foreach ($file in Get-ChildItem -LiteralPath $drillRoot -Filter 'race-*' -File) {
+                "--- $($file.Name) ---`n$(Get-Content -LiteralPath $file.FullName -Raw)"
+            }
+            throw "Concurrent reservation process failed (exit $($process.ExitCode)). Inspect $drillRoot`n$($detail -join "`n")"
+        }
     }
     Invoke-Checked $psql ($sqlArgs + @('-f', (Join-Path $repoRoot 'infra/scripts/test-database-concurrency.sql')))
     $passed = $true
